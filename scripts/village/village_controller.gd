@@ -22,12 +22,13 @@ var village := VillageModel.new()
 var build_mode := false
 var selected_building_id := ""
 var selected_object: Dictionary = {}
+var moving_object_id := ""
 var _loaded_saved_layout := false
 var _status_label: Label
 var _selection_panel: PanelContainer
 var _selection_text: Label
 var _selection_art: TextureRect
-var _selection_actions: HBoxContainer
+var _selection_actions: HFlowContainer
 var _build_panel: PanelContainer
 var _build_buttons: HBoxContainer
 var _debug_label: Label
@@ -67,7 +68,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_debug_label.visible = not _debug_label.visible
 		_update_debug_overlay()
 	elif event.is_action_pressed("ui_cancel"):
-		if build_mode:
+		if not moving_object_id.is_empty():
+			_end_move()
+			_status_label.text = "Move cancelled."
+		elif build_mode:
 			_set_build_mode(false)
 		else:
 			_deselect()
@@ -198,8 +202,9 @@ func _build_hud() -> void:
 	_selection_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	selection_content.add_child(_selection_art)
 	selection_content.add_child(_selection_text)
-	_selection_actions = HBoxContainer.new()
-	_selection_actions.add_theme_constant_override("separation", 8)
+	_selection_actions = HFlowContainer.new()
+	_selection_actions.add_theme_constant_override("h_separation", 8)
+	_selection_actions.add_theme_constant_override("v_separation", 6)
 	selection_content.add_child(_selection_actions)
 	_training_menu = PopupMenu.new()
 	_training_menu.id_pressed.connect(_train_troop_from_menu)
@@ -217,6 +222,9 @@ func _handle_world_click() -> void:
 	if not village.grid.contains_cell(cell):
 		_deselect()
 		return
+	if not moving_object_id.is_empty():
+		_try_move_to(cell)
+		return
 	if build_mode and not selected_building_id.is_empty():
 		var result := village.try_place(selected_building_id, cell)
 		if result["ok"]:
@@ -227,6 +235,7 @@ func _handle_world_click() -> void:
 			_update_resources()
 			_status_label.text = "%s placed at %d, %d." % [result["object"]["name"], cell.x, cell.y]
 			_update_hover()
+			SaveManager.save_village(village)
 		else:
 			_status_label.text = result["reason"]
 		return
@@ -271,6 +280,11 @@ func _get_unit_at(_cell: Vector2i) -> Dictionary:
 
 
 func _update_hover() -> void:
+	if not moving_object_id.is_empty():
+		var moving_cell := village.grid.world_to_cell(get_global_mouse_position())
+		var footprint: Vector2i = selected_object.get("footprint", Vector2i.ONE)
+		grid_overlay.set_preview(moving_cell, footprint, village.can_move_structure(moving_object_id, moving_cell))
+		return
 	if not build_mode or selected_building_id.is_empty():
 		return
 	var cell := village.grid.world_to_cell(get_global_mouse_position())
@@ -284,6 +298,7 @@ func _toggle_build_mode() -> void:
 
 
 func _set_build_mode(enabled: bool) -> void:
+	_end_move()
 	build_mode = enabled
 	_build_panel.visible = build_mode
 	grid_overlay.set_grid_visible(build_mode)
@@ -313,6 +328,8 @@ func _select_building(building_id: String) -> void:
 
 
 func _deselect() -> void:
+	if not moving_object_id.is_empty():
+		_end_move()
 	selected_object.clear()
 	objects.selected_id = ""
 	objects.refresh()
@@ -354,6 +371,7 @@ func _update_selection_panel() -> void:
 	var selected_id := str(selected_object.get("id", ""))
 	if not BuildingCatalog.get_definition(structure_type).is_empty():
 		_selection_actions.add_child(_new_button("UPGRADE  •  %d gold" % (400 * int(selected_object.get("level", 1))), _upgrade_selected.bind(selected_id)))
+		_selection_actions.add_child(_new_button("MOVE", _start_move.bind(selected_id)))
 		if structure_type == "gold_mine" or structure_type == "elixir_pump":
 			_selection_actions.add_child(_new_button("COLLECT", _collect_selected.bind(selected_id)))
 		elif structure_type == "barracks":
@@ -366,6 +384,43 @@ func _update_selection_panel() -> void:
 			_selection_actions.add_child(_new_button("GARRISON  •  %s" % preset_label, _cycle_castle_garrison.bind(selected_id)))
 
 
+func _start_move(object_id: String) -> void:
+	if selected_object.is_empty() or str(selected_object.get("id", "")) != object_id:
+		return
+	moving_object_id = object_id
+	var building_type := str(selected_object.get("type", ""))
+	grid_overlay.set_grid_visible(true)
+	grid_overlay.set_preview_art(objects.preview_art(building_type), objects.preview_size(building_type))
+	_status_label.text = "Moving %s: click a clear tile to place it. Escape cancels." % selected_object["name"]
+	_update_hover()
+
+
+func _end_move() -> void:
+	if moving_object_id.is_empty():
+		return
+	moving_object_id = ""
+	grid_overlay.set_preview_art(null)
+	grid_overlay.set_preview(Vector2i(-1, -1), Vector2i.ONE, false)
+	grid_overlay.set_grid_visible(build_mode)
+
+
+func _try_move_to(cell: Vector2i) -> void:
+	var result := village.move_structure(moving_object_id, cell)
+	if not result["ok"]:
+		_status_label.text = result["reason"]
+		return
+	var moved_id := moving_object_id
+	_end_move()
+	selected_object = result["structure"]
+	objects.refresh()
+	objects.play_place(moved_id)
+	terrain.set_village(village)
+	AudioManager.play_sfx("build_place")
+	_update_selection_panel()
+	SaveManager.save_village(village)
+	_status_label.text = "%s moved to %d, %d." % [selected_object["name"], cell.x, cell.y]
+
+
 func _focus_town_hall() -> void:
 	for structure in village.structures:
 		if structure["type"] == "town_hall":
@@ -376,6 +431,7 @@ func _focus_town_hall() -> void:
 
 
 func _return_to_menu() -> void:
+	SaveManager.save_village(village)
 	SceneManager.change_to(SceneManager.MAIN_MENU, GameManager.GameState.MAIN_MENU)
 
 
@@ -404,6 +460,7 @@ func _upgrade_selected(object_id: String) -> void:
 	AudioManager.play_sfx("build_place")
 	_update_selection_panel()
 	_update_resources()
+	SaveManager.save_village(village)
 	_status_label.text = "%s upgraded to level %d." % [selected_object["name"], selected_object["level"]]
 
 

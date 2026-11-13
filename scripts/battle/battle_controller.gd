@@ -17,7 +17,8 @@ const TILE := VillageGrid.TILE_SIZE
 @onready var camera = $Camera2D
 @onready var units = $Units
 @onready var targets = $Targets
-var village := VillageModel.new()
+var village := VillageModel.new()  # Throwaway copy that the battle is allowed to damage.
+var home_village := VillageModel.new()  # The player's real layout; never damaged by a battle.
 var battle: BattleManager
 var selected := "warrior"
 var _stats: Label
@@ -40,12 +41,16 @@ var _last_hud_frame := -100
 
 func _ready() -> void:
 	var saved: Variant = SaveManager.load_village()
-	if saved is VillageModel: village = saved
-	else: village.create_starter_layout()
-	var recovered_save := village.repair_playable_state()
+	if saved is VillageModel: home_village = saved
+	else: home_village.create_starter_layout()
+	var recovered_save := home_village.repair_playable_state()
 	# Battle may be opened directly or after a previously depleted attack; always start fully stocked.
-	village.refill_player_inventory()
-	SaveManager.save_village(village)
+	home_village.refill_player_inventory()
+	SaveManager.save_village(home_village)
+	# The battle damages and deletes buildings, so it runs on a copy of the saved layout.
+	village = VillageModel.new()
+	if not village.deserialize(home_village.serialize()):
+		village = home_village
 	objects.battle_mode = true
 	objects.set_village(village)
 	terrain.set_village(village)
@@ -335,7 +340,10 @@ func _set_status(message: String) -> void:
 
 func _finish(result: Dictionary) -> void:
 	GameManager.set_state(GameManager.GameState.BATTLE_RESULT)
-	SaveManager.save_village(village)
+	# Keep the undamaged home layout; only the loot carries back to the village.
+	home_village.gold += int(result.get("loot_gold", 0))
+	home_village.elixir += int(result.get("loot_elixir", 0))
+	SaveManager.save_village(home_village)
 	var box := VBoxContainer.new()
 	_result.add_child(box)
 	var title := "VICTORY" if result.phase == "VICTORY" else ("TIME UP" if result.phase == "TIMEOUT" else "DEFEAT")
@@ -356,7 +364,7 @@ func _finish(result: Dictionary) -> void:
 	_update_hud()
 
 func _retreat() -> void:
-	SaveManager.save_village(village)
+	SaveManager.save_village(home_village)
 	SceneManager.change_to(SceneManager.VILLAGE, GameManager.GameState.VILLAGE)
 
 func _label(text_value: String, size: int, color: Color) -> Label:

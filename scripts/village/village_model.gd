@@ -93,6 +93,37 @@ func try_place(building_id: String, cell: Vector2i) -> Dictionary:
 	return {"ok": true, "object": entry}
 
 
+func can_move_structure(object_id: String, new_cell: Vector2i) -> bool:
+	for structure in structures:
+		if structure["id"] != object_id:
+			continue
+		var old_cell: Vector2i = structure["cell"]
+		var footprint: Vector2i = structure["footprint"]
+		# Free the building's own tiles first so it may overlap its old position.
+		grid.release(old_cell, footprint, object_id)
+		var clear := grid.is_footprint_clear(new_cell, footprint)
+		grid.occupy(old_cell, footprint, object_id)
+		return clear
+	return false
+
+
+func move_structure(object_id: String, new_cell: Vector2i) -> Dictionary:
+	for structure in structures:
+		if structure["id"] != object_id:
+			continue
+		var old_cell: Vector2i = structure["cell"]
+		var footprint: Vector2i = structure["footprint"]
+		if new_cell == old_cell:
+			return {"ok": false, "reason": "The building is already there."}
+		grid.release(old_cell, footprint, object_id)
+		if not grid.occupy(new_cell, footprint, object_id):
+			grid.occupy(old_cell, footprint, object_id)
+			return {"ok": false, "reason": "That space is outside the village or already occupied."}
+		structure["cell"] = new_cell
+		return {"ok": true, "structure": structure}
+	return {"ok": false, "reason": "Building no longer exists."}
+
+
 func collect_from_structure(object_id: String) -> Dictionary:
 	for structure in structures:
 		if structure["id"] != object_id:
