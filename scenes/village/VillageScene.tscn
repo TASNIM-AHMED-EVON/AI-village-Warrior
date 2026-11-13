@@ -1,0 +1,24 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/village/village_controller.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/village/village_terrain.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/village/village_object_layer.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/village/village_grid_overlay.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/village/strategy_camera.gd" id="5"]
+
+[node name="VillageScene" type="Node2D"]
+script = ExtResource("1")
+
+[node name="Terrain" type="Node2D" parent="."]
+script = ExtResource("2")
+
+[node name="Objects" type="Node2D" parent="."]
+script = ExtResource("3")
+
+[node name="GridOverlay" type="Node2D" parent="."]
+script = ExtResource("4")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(0, 720)
+zoom = Vector2(0.72, 0.72)
+script = ExtResource("5")
