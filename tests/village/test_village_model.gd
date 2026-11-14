@@ -100,6 +100,30 @@ func _run() -> void:
 	_check(dragon.configure("dragon") and dragon.is_flying and dragon.projectile_kind == "fire", "dragon configures as a flying fire breather")
 	_check(dragon.attack_interval < 0.5, "dragon breath ticks continuously")
 	dragon.free()
+	# Resetting every level back to 1.
+	var resetter := VillageModel.new()
+	resetter.create_starter_layout()
+	resetter.refill_player_inventory()
+	var base_hp := {}
+	for structure in resetter.structures:
+		base_hp[structure["id"]] = int(structure["max_hp"])
+	for structure in resetter.structures:
+		resetter.upgrade_structure(structure["id"])
+		resetter.upgrade_structure(structure["id"])
+	resetter.try_place("laboratory", Vector2i(5, 40))
+	resetter.upgrade_troop("warrior")
+	var cells_before := resetter.structures.size()
+	_check(resetter.reset_all_levels() > 0, "reset reports what it changed")
+	var all_level_one := true
+	var all_base_hp := true
+	for structure in resetter.structures:
+		if int(structure["level"]) != 1: all_level_one = false
+		if base_hp.has(structure["id"]) and int(structure["max_hp"]) != int(base_hp[structure["id"]]): all_base_hp = false
+		if int(structure["hp"]) != int(structure["max_hp"]): all_base_hp = false
+	_check(all_level_one, "every building is level 1 after a reset")
+	_check(all_base_hp, "every building is back to its base hit points")
+	_check(resetter.troop_level("warrior") == 1, "troop levels are reset")
+	_check(resetter.structures.size() == cells_before, "reset keeps the village layout")
 	if failures == 0:
 		print("Village model checks passed.")
 		quit(0)

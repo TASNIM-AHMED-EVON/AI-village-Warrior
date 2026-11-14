@@ -37,6 +37,7 @@ var _gold_label: Label
 var _elixir_label: Label
 var _gems_label: Label
 var _training_panel: PanelContainer
+var _reset_dialog: ConfirmationDialog
 var _train_rows: Dictionary = {}
 var _train_elixir_label: Label
 var _lab_menu: PopupMenu
@@ -116,6 +117,7 @@ func _build_hud() -> void:
 	_gold_label = _resource_chip(top_row, "gold", Color("f1d477"))
 	_elixir_label = _resource_chip(top_row, "elixir", Color("f08bce"))
 	_gems_label = _resource_chip(top_row, "gems", Color("8be4c8"))
+	top_row.add_child(_new_button("RESET LEVELS", _ask_reset_levels))
 	top_row.add_child(_new_button("SAVE", _save_village))
 	var menu_button := _new_button("MENU", _return_to_menu)
 	top_row.add_child(menu_button)
@@ -443,6 +445,26 @@ func _focus_town_hall() -> void:
 			strategy_camera.target_position = village.grid.cell_to_world(center_cell)
 			strategy_camera.zoom = Vector2.ONE * 0.95
 			return
+
+
+func _ask_reset_levels() -> void:
+	if _reset_dialog == null:
+		_reset_dialog = ConfirmationDialog.new()
+		_reset_dialog.title = "Reset all levels"
+		_reset_dialog.dialog_text = "Set every building and every troop back to level 1?\nYour village layout, resources and army are kept."
+		_reset_dialog.ok_button_text = "Reset to level 1"
+		_reset_dialog.confirmed.connect(_reset_levels)
+		add_child(_reset_dialog)
+	_reset_dialog.popup_centered()
+
+
+func _reset_levels() -> void:
+	var changed := village.reset_all_levels()
+	objects.refresh()
+	_update_selection_panel()
+	_update_resources()
+	SaveManager.save_village(village)
+	_status_label.text = "All levels reset to 1 (%d changed)." % changed
 
 
 func _return_to_menu() -> void:

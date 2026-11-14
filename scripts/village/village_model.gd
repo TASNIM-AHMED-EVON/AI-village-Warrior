@@ -162,6 +162,24 @@ func upgrade_structure(object_id: String) -> Dictionary:
 	return {"ok": false, "reason": "Building no longer exists."}
 
 
+## Puts every building and every troop back to level 1. Layout, resources and army counts are untouched.
+func reset_all_levels() -> int:
+	var changed := 0
+	for structure in structures:
+		var definition := BuildingCatalog.get_definition(str(structure["type"]))
+		if definition.is_empty():
+			continue
+		if int(structure.get("level", 1)) != 1 or int(structure.get("max_hp", 0)) != int(definition["hp"]):
+			changed += 1
+		structure["level"] = 1
+		structure["max_hp"] = int(definition["hp"])
+		structure["hp"] = structure["max_hp"]
+	if not troop_levels.is_empty():
+		changed += troop_levels.size()
+	troop_levels = {}
+	return changed
+
+
 func set_castle_garrison(object_id: String, preset_index: int) -> Dictionary:
 	for structure in structures:
 		if structure["id"] != object_id:
