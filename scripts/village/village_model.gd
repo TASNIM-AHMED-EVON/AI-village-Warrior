@@ -8,12 +8,13 @@ var units: Array[Dictionary] = []
 var gold := 1250
 var elixir := 840
 var gems := 100
-var army: Dictionary = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+var army: Dictionary = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2, "dragon": 0}
 var troop_levels: Dictionary = {}  # troop_id -> level researched in the Laboratory (missing = level 1)
 var _next_id := 1
 
 const FULL_RESOURCE_AMOUNT := 999999
-const FULL_ARMY := {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+const MAX_TRAIN_BATCH := 99
+const FULL_ARMY := {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2, "dragon": 0}
 
 
 func refill_player_inventory() -> void:
@@ -32,7 +33,7 @@ func create_starter_layout() -> void:
 	gold = 1250
 	elixir = 840
 	gems = 100
-	army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+	army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2, "dragon": 0}
 	_next_id = 1
 	_add_structure("town_hall", Vector2i(29, 28))
 	_add_structure("cannon", Vector2i(20, 28))
@@ -75,7 +76,7 @@ func repair_playable_state() -> bool:
 	for troop_id in TroopCatalog.all_ids():
 		total_troops += maxi(0, int(army.get(troop_id, 0)))
 	if total_troops == 0:
-		army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+		army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2, "dragon": 0}
 		repaired = true
 	return repaired
 
@@ -182,6 +183,11 @@ func cycle_castle_garrison(object_id: String) -> Dictionary:
 
 
 func train_troop(troop_id: String) -> Dictionary:
+	return train_troops(troop_id, 1)
+
+
+## Trains `count` troops of one type at once, paid for in a single purchase.
+func train_troops(troop_id: String, count: int) -> Dictionary:
 	var definition := TroopCatalog.get_definition(troop_id)
 	if definition.is_empty():
 		return {"ok": false, "reason": "Unknown troop type."}
@@ -191,12 +197,15 @@ func train_troop(troop_id: String) -> Dictionary:
 			barracks_count += 1
 	if barracks_count == 0:
 		return {"ok": false, "reason": "Build a Barracks before training troops."}
-	var cost := int(definition["cost"])
+	if count < 1:
+		return {"ok": false, "reason": "Choose at least one troop to train."}
+	count = mini(count, MAX_TRAIN_BATCH)
+	var cost := int(definition["cost"]) * count
 	if elixir < cost:
-		return {"ok": false, "reason": "Not enough elixir. This troop needs %d." % cost}
+		return {"ok": false, "reason": "Not enough elixir. %d %s need %d." % [count, definition["name"], cost]}
 	elixir -= cost
-	army[troop_id] = int(army.get(troop_id, 0)) + 1
-	return {"ok": true, "troop": definition, "count": army[troop_id]}
+	army[troop_id] = int(army.get(troop_id, 0)) + count
+	return {"ok": true, "troop": definition, "count": army[troop_id], "added": count, "cost": cost}
 
 
 func troop_level(troop_id: String) -> int:
@@ -356,10 +365,10 @@ func deserialize(source: Dictionary) -> bool:
 	gold = maxi(0, int(resources.get("gold", 1250)))
 	elixir = maxi(0, int(resources.get("elixir", 840)))
 	gems = maxi(0, int(resources.get("gems", 100)))
-	army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+	army = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2, "dragon": 0}
 	var saved_army: Dictionary = source.get("army", {})
 	for troop_id in TroopCatalog.all_ids():
-		army[troop_id] = maxi(0, int(saved_army.get(troop_id, army[troop_id])))
+		army[troop_id] = maxi(0, int(saved_army.get(troop_id, int(army.get(troop_id, 0)))))
 	troop_levels = {}
 	var saved_levels: Variant = source.get("troop_levels", {})
 	if saved_levels is Dictionary:

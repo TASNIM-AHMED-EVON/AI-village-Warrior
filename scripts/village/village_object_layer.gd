@@ -17,6 +17,7 @@ const ART_PATHS := {
 	"mage": "res://assets/troops/mage_sprite.png",
 	"goblin": "res://assets/troops/goblin_sprite.png",
 	"tank": "res://assets/generated/siege_wagon.png",
+	"dragon": "res://assets/troops/dragon_sprite.png",
 }
 const DIMENSIONS := {
 	"town_hall": Vector2(235, 211),
@@ -33,6 +34,7 @@ const DIMENSIONS := {
 	"mage": Vector2(53, 72),
 	"goblin": Vector2(51, 64),
 	"tank": Vector2(78, 66),
+	"dragon": Vector2(120, 105),
 }
 const FALLBACK_ART := {
 	"wall": "res://assets/buildings/wall_sprite.png",
@@ -81,6 +83,7 @@ func refresh() -> void:
 			_entities[id] = entity
 		else:
 			entity.position = _structure_anchor(structure)
+			entity.set_level(int(structure.get("level", 1)))
 		entity.set_selected(selected_id == id)
 		if battle_mode:
 			entity.show_health_bar = false
@@ -170,6 +173,7 @@ func _create_structure(structure: Dictionary) -> VisualEntity:
 		shadow_offset,
 		battle_mode and type == "cannon"
 	)
+	entity.setup_decor(footprint, int(structure.get("level", 1)), not battle_mode, sprite_size)
 	return entity
 
 

@@ -3,13 +3,14 @@ const UI_THEME := preload("res://themes/medieval_ui.tres")
 const AI_OVERLAY := preload("res://scripts/battle/ai_path_overlay.gd")
 const COMBAT_EFFECTS := preload("res://scripts/battle/combat_fx.gd")
 const BATTLE_SEARCH := preload("res://scripts/ai/battle_search_ai.gd")
-const TROOPS := ["warrior", "archer", "mage", "goblin", "tank"]
+const TROOPS := ["warrior", "archer", "mage", "goblin", "tank", "dragon"]
 const TROOP_ART := {
 	"warrior": "res://assets/troops/warrior_sprite.png",
 	"archer": "res://assets/troops/archer_sprite.png",
 	"mage": "res://assets/troops/mage_sprite.png",
 	"goblin": "res://assets/troops/goblin_sprite.png",
 	"tank": "res://assets/generated/siege_wagon.png",
+	"dragon": "res://assets/troops/dragon_sprite.png",
 }
 const TILE := VillageGrid.TILE_SIZE
 @onready var terrain = $Terrain
@@ -172,8 +173,8 @@ func _build_hud() -> void:
 	panel.anchor_top = 1.0
 	panel.anchor_right = 0.5
 	panel.anchor_bottom = 1.0
-	panel.offset_left = -365
-	panel.offset_right = 365
+	panel.offset_left = -435
+	panel.offset_right = 435
 	panel.offset_top = -146
 	panel.offset_bottom = -12
 	hud.add_child(panel)

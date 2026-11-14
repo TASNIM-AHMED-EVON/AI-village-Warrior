@@ -131,6 +131,8 @@ class Projectile extends Node2D:
 		queue_redraw()
 
 	func _draw() -> void:
+		if _kind == "fire":
+			return  # The dragon's stream is drawn by the dragon; this only times the impact flare.
 		if _kind == "magic":
 			var pulse := 1.0 + 0.18 * sin(_age * 38.0)
 			for index in range(_trail.size() - 1):
@@ -166,7 +168,7 @@ class ImpactBurst extends Node2D:
 	func configure(fx: Node, kind: String) -> void:
 		_fx = fx
 		_kind = kind
-		_life = 0.36 if kind == "magic" else 0.24
+		_life = 0.36 if kind == "magic" else (0.42 if kind == "fire" else 0.24)
 		z_index = 26
 
 	func _process(delta: float) -> void:
@@ -184,6 +186,14 @@ class ImpactBurst extends Node2D:
 		var progress := clampf(_age / _life, 0.0, 1.0)
 		var fade := 1.0 - progress
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2(_visual_scale, _visual_scale))
+		if _kind == "fire":
+			draw_circle(Vector2.ZERO, 20.0 * fade + 6.0, Color(0.95, 0.25, 0.05, 0.35 * fade))
+			draw_circle(Vector2.ZERO, 13.0 * fade + 3.0, Color(1.0, 0.6, 0.12, 0.65 * fade))
+			draw_circle(Vector2.ZERO, 6.0 * fade, Color(1.0, 0.95, 0.6, 0.9 * fade))
+			for index in range(6):
+				var rise := Vector2(sin(float(index) * 2.3) * 10.0, -10.0 - 28.0 * progress * (0.6 + 0.12 * float(index)))
+				draw_circle(rise, 2.6 * fade + 0.6, Color(1.0, 0.7, 0.2, fade))
+			return
 		if _kind == "magic":
 			draw_circle(Vector2.ZERO, 12.0 * fade, Color(0.8, 0.65, 1.0, 0.5 * fade))
 			draw_arc(Vector2.ZERO, 6.0 + 24.0 * progress, 0.0, TAU, 28, Color(0.85, 0.72, 1.0, 0.9 * fade), 3.0, true)

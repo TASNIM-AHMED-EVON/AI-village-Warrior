@@ -29,6 +29,12 @@ const DEFINITIONS := {
 		"color": Color("e58d6b"), "projectile": "arrow",
 		"description": "A light ranged troop that attacks exposed targets.",
 	},
+	"dragon": {
+		"name": "Dragon", "hp": 1100, "damage": 15, "range": 4,
+		"move_speed": 76.0, "attack_speed": 0.2, "cost": 400, "housing_space": 12,
+		"color": Color("d6523a"), "projectile": "fire", "flying": true,
+		"description": "Flies over walls and scorches targets with a continuous stream of fire. Ground cannons cannot hit it.",
+	},
 	"tank": {
 		"name": "Tank", "hp": 700, "damage": 55, "range": 1,
 		"move_speed": 40.0, "attack_speed": 1.8, "cost": 120, "housing_space": 8,

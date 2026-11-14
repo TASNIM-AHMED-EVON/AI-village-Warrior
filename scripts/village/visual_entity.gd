@@ -20,6 +20,12 @@ var current_health := 0
 ## bar (hidden behind the sprite) is switched off there.
 var show_health_bar := true
 var hit_tween: Tween
+## Presentation extras for buildings: the foundation plate, the level badge and the ambient animation layer.
+var footprint := Vector2i.ZERO
+var level := 1
+var show_level_badge := false
+var _decor_ready := false
+var _ambient: BuildingAmbientFx
 var _sprite: Sprite2D
 var _animator: AnimatedSprite2D
 var _cannon_pivot: Node2D
@@ -55,6 +61,34 @@ func configure_structure(id: String, type: String, texture: Texture2D, dimension
 		_cannon_gun.position = _sprite.position - _cannon_pivot.position
 		_cannon_pivot.add_child(_cannon_gun)
 		add_child(_cannon_pivot)
+	queue_redraw()
+
+
+## Called by the object layer once a structure's art exists. `village_mode` adds the level badge and ambient life.
+func setup_decor(footprint_cells: Vector2i, structure_level: int, village_mode: bool, sprite_dimensions: Vector2) -> void:
+	footprint = footprint_cells
+	level = maxi(structure_level, 1)
+	show_level_badge = village_mode
+	if village_mode and BuildingAmbientFx.supports(entity_type) and _ambient == null:
+		_ambient = BuildingAmbientFx.new()
+		_ambient.name = "AmbientFx"
+		add_child(_ambient)
+		_ambient.configure(entity_type, sprite_dimensions)
+	_decor_ready = true
+	queue_redraw()
+
+
+## Keeps the badge in step with the model and plays a celebration when a building levels up.
+func set_level(new_level: int) -> void:
+	new_level = maxi(new_level, 1)
+	if new_level == level:
+		return
+	var leveled_up := new_level > level and _decor_ready
+	level = new_level
+	if leveled_up:
+		play_placement()
+		if _ambient != null:
+			_ambient.burst()
 	queue_redraw()
 
 
@@ -157,6 +191,7 @@ func play_placement() -> void:
 
 
 func _draw() -> void:
+	_draw_foundation()
 	# Soft layered ellipse, no texture files or per-frame allocations.
 	for band in range(3):
 		var scale_factor := 1.0 - float(band) * 0.18
@@ -169,6 +204,55 @@ func _draw() -> void:
 		var top := Vector2(-25, -shadow_radius.y - 29)
 		draw_rect(Rect2(top, Vector2(50, 6)), Color("152027", 0.86))
 		draw_rect(Rect2(top + Vector2(1, 1), Vector2(48 * ratio, 4)), Color("70db87") if ratio > .45 else Color("eea05a") if ratio > .2 else Color("e7645c"))
+	_draw_level_badge()
+
+
+## A packed-earth plate under the building, tinted by the building's own colour, so it sits on the ground
+## instead of floating on the grass. Corner maths follows the isometric grid (see VillageGrid).
+func _draw_foundation() -> void:
+	if entity_kind != "structure" or footprint == Vector2i.ZERO or entity_type == "wall" or entity_type == "cannon":
+		return
+	var fx := float(footprint.x)
+	var fy := float(footprint.y)
+	var tx := VillageGrid.TILE_SIZE.x * 0.25
+	var ty := VillageGrid.TILE_SIZE.y * 0.5
+	var front := Vector2((fx - fy) * tx, 0.0)
+	var right := Vector2((fx + fy) * tx, -fy * ty)
+	var back := Vector2((fy - fx) * tx, -(fx + fy) * ty)
+	var left := Vector2(-(fx + fy) * tx, -fx * ty)
+	var tint: Color = BuildingCatalog.get_definition(entity_type).get("color", Color("8b7355"))
+	var earth := Color(0.47, 0.40, 0.30).lerp(tint, 0.22)
+	draw_colored_polygon(PackedVector2Array([front, right, back, left]), Color(earth, 0.55))
+	var middle := (front + right + back + left) * 0.25
+	draw_colored_polygon(PackedVector2Array([
+		middle.lerp(front, 0.86), middle.lerp(right, 0.86), middle.lerp(back, 0.86), middle.lerp(left, 0.86),
+	]), Color(earth.lightened(0.18), 0.30))
+	# Faint flagstone seams, one per tile.
+	for i in range(1, footprint.x):
+		var t := float(i) / fx
+		draw_line(left.lerp(front, t), back.lerp(right, t), Color(0.12, 0.09, 0.06, 0.20), 1.0)
+	for j in range(1, footprint.y):
+		var u := float(j) / fy
+		draw_line(front.lerp(right, u), left.lerp(back, u), Color(0.12, 0.09, 0.06, 0.20), 1.0)
+	draw_polyline(PackedVector2Array([left, front, right]), Color(0.17, 0.12, 0.08, 0.65), 2.0, true)
+	draw_polyline(PackedVector2Array([left, back, right]), Color(1.0, 0.95, 0.8, 0.22), 1.5, true)
+
+
+func _draw_level_badge() -> void:
+	if not show_level_badge or entity_kind != "structure" or level < 2 or entity_type == "wall":
+		return
+	var tier_color := Color("cfdde6")
+	if level >= 7:
+		tier_color = Color("c9a2ff")
+	elif level >= 4:
+		tier_color = Color("ffd567")
+	var font := ThemeDB.fallback_font
+	var label := "LV %d" % level
+	var center := Vector2(0.0, 17.0)
+	var rect := Rect2(center - Vector2(22.0, 9.0), Vector2(44.0, 18.0))
+	draw_rect(rect, Color(0.07, 0.10, 0.13, 0.88))
+	draw_rect(rect, tier_color, false, 1.6)
+	draw_string(font, center + Vector2(-22.0, 4.5), label, HORIZONTAL_ALIGNMENT_CENTER, 44.0, 12, tier_color)
 
 
 func _draw_ellipse(center: Vector2, radius: Vector2, fill: Color) -> void:

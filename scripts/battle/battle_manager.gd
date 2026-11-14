@@ -37,7 +37,7 @@ const BREACH_GAP_WEIGHT := 1.5
 const HOME_ARRIVAL_DISTANCE := 6.0
 const DEFENDER_HIT_PROBABILITY := 0.85
 ## Projectile speeds (world px per battle second) and the shortest / longest time a shot is allowed to fly.
-const PROJECTILE_SPEEDS := {"arrow": 820.0, "magic": 560.0}
+const PROJECTILE_SPEEDS := {"arrow": 820.0, "magic": 560.0, "fire": 900.0}
 const PROJECTILE_MIN_FLIGHT := 0.14
 const PROJECTILE_MAX_FLIGHT := 0.42
 
@@ -440,6 +440,8 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 	var no_path: Array[Vector2i] = []
 	if structure.is_empty():
 		return no_path
+	if actor.is_flying:
+		return _fly_path(actor, target)
 	var start := village.grid.world_to_cell(actor.global_position)
 	var radius := ceili(actor.attack_range / VillageGrid.TILE_SIZE.y) + 2
 	var origin: Vector2i = structure["cell"]
@@ -457,7 +459,22 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 	return GridPathfinder.find_path_to_any(village.grid, start, goals, path_algorithm, trace)
 
 
+## Flyers go in a straight line over walls and buildings, stopping once the target is in range.
+func _fly_path(actor: TroopActor, target: Node2D) -> Array[Vector2i]:
+	var start := village.grid.world_to_cell(actor.global_position)
+	var path: Array[Vector2i] = [start]
+	var gap := target.global_position - actor.global_position
+	if gap.length() > actor.attack_range * 0.7:
+		var stand := target.global_position - gap.normalized() * actor.attack_range * 0.6
+		var stand_cell := village.grid.world_to_cell(stand)
+		if stand_cell != start:
+			path.append(stand_cell)
+	return path
+
+
 func _find_troop_path(actor: TroopActor, target: TroopActor, trace: Dictionary = {}) -> Array[Vector2i]:
+	if actor.is_flying:
+		return _fly_path(actor, target)
 	var no_path: Array[Vector2i] = []
 	if not is_instance_valid(target):
 		return no_path
@@ -625,6 +642,7 @@ func _on_attack_requested(attacker: TroopActor, target: Node2D, damage: int) -> 
 		_retarget_after_kill(attacker)  # The victim died a moment ago; do not keep swinging at the corpse.
 		return
 	var flight_time := 0.0
+	var fire_stream := attacker.projectile_kind == "fire"
 	if attacker.projectile_kind != "":
 		# Ranged attack: show the arrow / spell flying to its target. The damage is dealt now, but a building's
 		# health bar and hit flash wait for the shot to land (flight_time).
@@ -632,12 +650,23 @@ func _on_attack_requested(attacker: TroopActor, target: Node2D, damage: int) -> 
 		var to_point := _projectile_end_point(target)
 		flight_time = _projectile_flight_time(attacker.projectile_kind, from_point.distance_to(to_point))
 		projectile_event.emit(attacker.projectile_kind, from_point, to_point, flight_time)
+	# A fire stream ticks several times a second; show one summed damage number every few ticks.
+	var show_number := true
+	if fire_stream:
+		attacker.fire_pool += damage
+		attacker.fire_ticks += 1
+		show_number = attacker.fire_ticks >= 4
 	if target is BattleBuildingTarget:
 		target.apply_damage(damage, attacker.global_position, flight_time)
-		damage_event.emit(target.global_position, damage, false)
+		if show_number:
+			damage_event.emit(target.global_position, attacker.fire_pool if fire_stream else damage, false)
 	elif target is TroopActor:
 		target.apply_damage(damage, attacker.global_position)
-		damage_event.emit(target.global_position, damage, false)
+		if show_number:
+			damage_event.emit(target.global_position, attacker.fire_pool if fire_stream else damage, false)
+	if fire_stream and show_number:
+		attacker.fire_pool = 0
+		attacker.fire_ticks = 0
 	if is_instance_valid(attacker) and attacker.state != TroopActor.State.DEAD:
 		var current_target: Variant = attacker.target
 		var target_gone := not is_instance_valid(current_target)
@@ -763,8 +792,9 @@ func _update_defenses(delta: float) -> void:
 		var defense_target: Variant = building_targets.get(building_id)
 		if not is_instance_valid(defense_target):
 			continue
-		if not is_instance_valid(target) or target.state == TroopActor.State.DEAD or target.global_position.distance_to(defense_target.global_position) > reach:
-			target = _select_defender_response(defense_target.global_position, reach)
+		var ground_only := type == "cannon"
+		if not is_instance_valid(target) or target.state == TroopActor.State.DEAD or target.global_position.distance_to(defense_target.global_position) > reach or (ground_only and target.is_flying):
+			target = _select_defender_response(defense_target.global_position, reach, ground_only)
 			tower_targets[building_id] = target
 		if is_instance_valid(target):
 			defense_target.aim_at(target.global_position)
@@ -777,12 +807,14 @@ func _update_defenses(delta: float) -> void:
 		tower_cooldowns[building_id] = cooldown
 
 
-func _select_defender_response(from_position: Vector2, max_range: float) -> TroopActor:
+func _select_defender_response(from_position: Vector2, max_range: float, ground_only: bool = false) -> TroopActor:
 	# Defenses focus the reachable attacker with the greatest current threat and vulnerability.
 	var best_response: TroopActor
 	var best_score := -INF
 	for attacker in attacker_units:
 		if not is_instance_valid(attacker) or attacker.state == TroopActor.State.DEAD:
+			continue
+		if ground_only and attacker.is_flying:
 			continue
 		var distance := from_position.distance_to(attacker.global_position)
 		if distance > max_range:
@@ -1004,6 +1036,8 @@ func _decide_defender(defender: TroopActor, attackers: Array[TroopActor]) -> voi
 	defender.think_cooldown = DEFENDER_THINK_INTERVAL + float(defender.get_instance_id() % 5) * 0.04
 	var reachable: Array[TroopActor] = []
 	for attacker in attackers:
+		if attacker.is_flying and defender.attack_range <= 60.0:
+			continue  # Melee defenders cannot reach a flyer.
 		if attacker.global_position.distance_to(defender.leash_center) <= defender.leash_radius:
 			reachable.append(attacker)
 	if reachable.is_empty():

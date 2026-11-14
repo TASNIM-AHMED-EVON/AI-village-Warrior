@@ -12,6 +12,9 @@ signal state_changed(previous_state: State, new_state: State)
 var troop_id := "warrior"
 var display_name := "Warrior"
 var troop_level := 1
+## Flyers ignore walls and ground pathing; they hover `fly_altitude` pixels above their ground position.
+var is_flying := false
+var fly_altitude := 0.0
 var max_hp := 1
 var hp := 1
 var damage := 1
@@ -38,11 +41,17 @@ var _attack_flash := 0.0
 ## "arrow" or "magic" for ranged troops (BattleManager launches the matching projectile), "" for melee.
 var projectile_kind := ""
 var _hit_flash := 0.0
+## Damage dealt by a fire stream since the last damage number was shown.
+var fire_pool := 0
+var fire_ticks := 0
 var _hit_point := Vector2(0, -30)
 var _death_elapsed := 0.0
 var _walk_phase := 0.0
 var _animation_time := 0.0
 var _art_sprite: Sprite2D
+var _sprite_base_y := 0.0
+var _altitude_now := 0.0
+var _bar_y := -83.0
 var _animated_sprite: AnimatedSprite2D
 static var _shared_frames: Dictionary = {}
 
@@ -70,6 +79,9 @@ func configure(unit_type: String, level: int = 1) -> bool:
 	move_speed = float(definition["move_speed"])
 	attack_interval = float(definition["attack_speed"])
 	projectile_kind = str(definition.get("projectile", ""))
+	is_flying = bool(definition.get("flying", false))
+	fly_altitude = 34.0 if is_flying else 0.0
+	_altitude_now = fly_altitude
 	_build_visual()
 	queue_redraw()
 	return true
@@ -77,6 +89,10 @@ func configure(unit_type: String, level: int = 1) -> bool:
 
 ## Where a shot leaves the troop (local offset to the bow / staff, and the same point in world space).
 func projectile_origin_local() -> Vector2:
+	if is_flying:
+		# The dragon breathes from its mouth, out in front of the head.
+		var side := -1.0 if facing_direction.x < -0.05 else 1.0
+		return Vector2(53.0 * side, -_altitude_now - 65.0)
 	return Vector2(0, -38) + facing_direction.normalized() * 9.0
 
 
@@ -149,6 +165,7 @@ func apply_damage(amount: int, source_position: Vector2 = Vector2.ZERO) -> void:
 
 func step(delta: float) -> void:
 	_animation_time += delta
+	_update_flight_pose(delta)
 	_hit_flash = maxf(0.0, _hit_flash - delta)
 	if _hit_flash > 0.0 or _attack_flash > 0.0 or state == State.DEAD:
 		queue_redraw()
@@ -263,12 +280,15 @@ func _build_visual() -> void:
 		dimensions = Vector2(51, 65)
 	elif troop_id == "tank":
 		dimensions = Vector2(78, 66)
+	elif troop_id == "dragon":
+		dimensions = Vector2(140, 122)
+	_bar_y = -83.0 if not is_flying else -(dimensions.y + fly_altitude) - 10.0
 	if TroopSpriteFrames.SHEETS.has(troop_id):
 		if not _shared_frames.has(troop_id):
 			var frame_bank := SpriteFrames.new()
 			for animation in ["idle", "walk", "attack", "death"]:
 				frame_bank.add_animation(animation)
-				frame_bank.set_animation_speed(animation, 10)
+				frame_bank.set_animation_speed(animation, 13 if troop_id == "dragon" else 10)
 				frame_bank.set_animation_loop(animation, animation != "death")
 				var row_data: Array = TroopSpriteFrames.ROWS[troop_id][animation]
 				for i in range(int(row_data[1])):
@@ -281,7 +301,8 @@ func _build_visual() -> void:
 		_animated_sprite.name = "CharacterAnimation"
 		_animated_sprite.sprite_frames = _shared_frames[troop_id]
 		_animated_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		_animated_sprite.position.y = -dimensions.y * .5
+		_sprite_base_y = -dimensions.y * .5
+		_animated_sprite.position.y = _sprite_base_y - fly_altitude
 		var frame: Texture2D = _animated_sprite.sprite_frames.get_frame_texture("idle", 0)
 		_animated_sprite.scale = dimensions / frame.get_size()
 		add_child(_animated_sprite)
@@ -342,8 +363,13 @@ func _draw() -> void:
 	var shadow_color := Color(0.045, 0.075, 0.06, 0.29)
 	if team == Team.DEFENDER:
 		shadow_color = Color(0.10, 0.20, 0.55, 0.42)
+	var shadow_scale := 1.0
+	if is_flying:
+		# A flyer's shadow stays on the ground: wider, softer, and smaller the higher it is.
+		shadow_scale = 2.6 - clampf(_altitude_now / maxf(fly_altitude, 1.0), 0.0, 1.0) * 0.5
+		shadow_color.a *= 0.62
 	draw_colored_polygon(PackedVector2Array([
-		Vector2(-15, 1), Vector2(0, -5), Vector2(15, 1), Vector2(0, 7),
+		Vector2(-15, 1) * shadow_scale, Vector2(0, -5) * shadow_scale, Vector2(15, 1) * shadow_scale, Vector2(0, 7) * shadow_scale,
 	]), shadow_color)
 	if team == Team.DEFENDER and state != State.DEAD:
 		# Small blue shield so defenders are readable at a glance.
@@ -353,8 +379,8 @@ func _draw() -> void:
 		draw_polyline(PackedVector2Array([Vector2(-6, -98), Vector2(6, -98), Vector2(6, -90), Vector2(0, -85), Vector2(-6, -90), Vector2(-6, -98)]), Color("d8e2ff"), 1.5)
 	if hp > 0 and hp < max_hp:
 		var health_ratio := clampf(float(hp) / float(max_hp), 0.0, 1.0)
-		draw_rect(Rect2(-21, -83, 42, 6), Color("17262b", 0.94))
-		draw_rect(Rect2(-20, -82, 40 * health_ratio, 4), Color("71d994") if health_ratio > .4 else Color("e58a59"))
+		draw_rect(Rect2(-21, _bar_y, 42, 6), Color("17262b", 0.94))
+		draw_rect(Rect2(-20, _bar_y + 1, 40 * health_ratio, 4), Color("71d994") if health_ratio > .4 else Color("e58a59"))
 	_draw_hit_effect()
 	if _attack_flash > 0.0:
 		_draw_attack_effect()
@@ -384,6 +410,8 @@ func _draw_attack_effect() -> void:
 				var fan := direction.rotated(float(index - 1) * 0.55)
 				draw_line(origin + fan * 4.0, origin + fan * (9.0 + 9.0 * strength), Color(1.0, 0.94, 0.71, strength), 2.2, true)
 			draw_circle(origin, 3.0 * strength, Color(1.0, 0.97, 0.8, strength))
+	elif projectile_kind == "fire":
+		_draw_fire_stream(origin)
 	elif projectile_kind == "magic":
 		# The bolt itself flies to the target (CombatFx); this is the spell gathering at the staff.
 		var strength := clampf((fade - 0.35) / 0.65, 0.0, 1.0)
@@ -395,3 +423,45 @@ func _draw_attack_effect() -> void:
 	else:
 		var angle := direction.angle()
 		draw_arc(origin + direction * 6.0, 22.0, angle - 0.55, angle + 0.55, 10, Color("ffe38d"), 2.5, true)
+
+
+## Hover bobbing while alive; a dying flyer drops to the ground.
+func _update_flight_pose(delta: float) -> void:
+	if not is_flying or _animated_sprite == null:
+		return
+	if state == State.DEAD:
+		_altitude_now = move_toward(_altitude_now, 0.0, 95.0 * delta)
+		_animated_sprite.position.y = _sprite_base_y - _altitude_now
+		return
+	var bob := sin(_animation_time * 3.4) * 4.0
+	_animated_sprite.position.y = _sprite_base_y - _altitude_now + bob
+
+
+## The dragon's continuous breath: a flickering jet from its mouth to whatever it is burning.
+func _draw_fire_stream(origin: Vector2) -> void:
+	if not is_instance_valid(target) or state == State.DEAD:
+		return
+	var end_point := to_local(target.global_position + Vector2(0, -34))
+	if target.has_method("impact_point"):
+		end_point = to_local(target.call("impact_point"))
+	var span := end_point - origin
+	if span.length() < 6.0:
+		return
+	var fade := clampf(_attack_flash / 0.48, 0.0, 1.0)
+	var direction := span.normalized()
+	var side := direction.orthogonal()
+	var segments := clampi(int(span.length() / 6.0), 12, 44)
+	for pass_index in range(3):
+		for i in range(segments):
+			var t := float(i) / float(segments - 1)
+			var wobble := sin(_animation_time * 31.0 + float(i) * 1.9 + float(pass_index) * 2.1) * (1.5 + 5.0 * t)
+			var center := origin + span * t + side * wobble
+			var radius := (3.0 + 17.0 * t) * (1.0 - 0.2 * float(pass_index)) * (0.8 + 0.2 * sin(_animation_time * 43.0 + float(i)))
+			if pass_index == 0:
+				draw_circle(center, radius * 1.15, Color(0.86, 0.16, 0.05, 0.30 * fade))
+			elif pass_index == 1:
+				draw_circle(center, radius * 0.82, Color(1.0, 0.52, 0.10, 0.55 * fade))
+			else:
+				draw_circle(center, radius * 0.48, Color(1.0, 0.92, 0.45, 0.85 * fade))
+	draw_circle(origin, 7.0, Color(1.0, 0.95, 0.65, 0.9 * fade))
+	draw_circle(end_point, 14.0 + 3.0 * sin(_animation_time * 40.0), Color(1.0, 0.45, 0.08, 0.45 * fade))

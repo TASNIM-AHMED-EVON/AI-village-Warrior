@@ -78,6 +78,28 @@ func _run() -> void:
 	_check(actor.configure("warrior", 3), "a levelled troop can be configured")
 	_check(actor.damage == TroopCatalog.damage_at_level("warrior", 3) and actor.max_hp == TroopCatalog.hp_at_level("warrior", 3), "levelled troop uses scaled stats")
 	actor.free()
+	# Bulk training and the dragon.
+	var bulk := VillageModel.new()
+	bulk.create_starter_layout()
+	bulk.refill_player_inventory()
+	var elixir_before := bulk.elixir
+	var batch: Dictionary = bulk.train_troops("archer", 10)
+	_check(batch["ok"] and int(batch["added"]) == 10, "ten archers can be trained in one batch")
+	_check(int(bulk.army["archer"]) == 18, "bulk training adds the whole batch to the army")
+	_check(bulk.elixir == elixir_before - 10 * int(TroopCatalog.get_definition("archer")["cost"]), "bulk training charges for every troop")
+	_check(not bulk.train_troops("archer", 0)["ok"], "training zero troops is rejected")
+	_check(bulk.train_troops("dragon", 3)["ok"] and int(bulk.army["dragon"]) == 3, "dragons can be trained at the Barracks")
+	bulk.elixir = 100
+	var broke: Dictionary = bulk.train_troops("dragon", 5)
+	_check(not broke["ok"] and int(bulk.army["dragon"]) == 3 and bulk.elixir == 100, "an unaffordable batch changes nothing")
+	var dragon_copy := VillageModel.new()
+	_check(dragon_copy.deserialize(JSON.parse_string(JSON.stringify(bulk.serialize()))) and int(dragon_copy.army["dragon"]) == 3, "dragon count survives save and load")
+	dragon_copy.refill_player_inventory()
+	_check(int(dragon_copy.army["dragon"]) == 3, "refill keeps trained dragons")
+	var dragon := TroopActor.new()
+	_check(dragon.configure("dragon") and dragon.is_flying and dragon.projectile_kind == "fire", "dragon configures as a flying fire breather")
+	_check(dragon.attack_interval < 0.5, "dragon breath ticks continuously")
+	dragon.free()
 	if failures == 0:
 		print("Village model checks passed.")
 		quit(0)

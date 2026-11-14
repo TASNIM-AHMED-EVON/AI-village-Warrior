@@ -36,7 +36,9 @@ var _debug_label: Label
 var _gold_label: Label
 var _elixir_label: Label
 var _gems_label: Label
-var _training_menu: PopupMenu
+var _training_panel: PanelContainer
+var _train_rows: Dictionary = {}
+var _train_elixir_label: Label
 var _lab_menu: PopupMenu
 
 
@@ -70,7 +72,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_debug_label.visible = not _debug_label.visible
 		_update_debug_overlay()
 	elif event.is_action_pressed("ui_cancel"):
-		if not moving_object_id.is_empty():
+		if _training_panel != null and _training_panel.visible:
+			_close_training_panel()
+		elif not moving_object_id.is_empty():
 			_end_move()
 			_status_label.text = "Move cancelled."
 		elif build_mode:
@@ -208,9 +212,7 @@ func _build_hud() -> void:
 	_selection_actions.add_theme_constant_override("h_separation", 8)
 	_selection_actions.add_theme_constant_override("v_separation", 6)
 	selection_content.add_child(_selection_actions)
-	_training_menu = PopupMenu.new()
-	_training_menu.id_pressed.connect(_train_troop_from_menu)
-	hud.add_child(_training_menu)
+	_build_training_panel(hud)
 	_lab_menu = PopupMenu.new()
 	_lab_menu.id_pressed.connect(_research_troop_from_menu)
 	hud.add_child(_lab_menu)
@@ -333,6 +335,7 @@ func _select_building(building_id: String) -> void:
 
 
 func _deselect() -> void:
+	_close_training_panel()
 	if not moving_object_id.is_empty():
 		_end_move()
 	selected_object = {}  # Never .clear(): this dictionary is the live building data.
@@ -384,7 +387,7 @@ func _update_selection_panel() -> void:
 		if structure_type == "gold_mine" or structure_type == "elixir_pump":
 			_selection_actions.add_child(_new_button("COLLECT", _collect_selected.bind(selected_id)))
 		elif structure_type == "barracks":
-			_selection_actions.add_child(_new_button("TRAIN TROOPS", _open_training_menu))
+			_selection_actions.add_child(_new_button("TRAIN TROOPS", _open_training_panel))
 		elif structure_type == "laboratory":
 			_selection_text.text += "\n\nTroops can be researched up to level %d." % village.max_troop_level()
 			_selection_actions.add_child(_new_button("RESEARCH TROOPS", _open_lab_menu))
@@ -495,27 +498,130 @@ func _collect_selected(object_id: String) -> void:
 	_status_label.text = "+%d %s collected." % [result["amount"], str(result["resource"]).capitalize()]
 
 
-func _open_training_menu() -> void:
-	_training_menu.clear()
-	for index in range(TroopCatalog.all_ids().size()):
-		var troop_id := TroopCatalog.all_ids()[index]
-		var definition := TroopCatalog.get_definition(troop_id)
-		_training_menu.add_item("%s  Lv %d  •  %d elixir" % [definition["name"], village.troop_level(troop_id), definition["cost"]], index)
-	_training_menu.position = Vector2i(DisplayServer.mouse_get_position())
-	_training_menu.popup()
+func _build_training_panel(hud: Control) -> void:
+	_training_panel = PanelContainer.new()
+	_training_panel.visible = false
+	_training_panel.anchor_left = 0.5
+	_training_panel.anchor_right = 0.5
+	_training_panel.anchor_top = 0.5
+	_training_panel.anchor_bottom = 0.5
+	_training_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_training_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_training_panel.offset_left = -80  # Sits left of the building panel so neither hides the other.
+	_training_panel.offset_right = -80
+	_training_panel.z_index = 20
+	hud.add_child(_training_panel)
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 14)
+	_training_panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	margin.add_child(column)
+	var header := HBoxContainer.new()
+	column.add_child(header)
+	var title := _new_label("BARRACKS  •  TRAIN TROOPS", 18, Color("f2d078"))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	_train_elixir_label = _new_label("", 14, Color("efa9db"))
+	header.add_child(_train_elixir_label)
+	header.add_child(_new_button("X", _close_training_panel))
+	column.add_child(_new_label("Pick how many of each troop to train, then press TRAIN.", 12, Color("c9d6c4")))
+	for troop_id in TroopCatalog.all_ids():
+		column.add_child(_build_training_row(troop_id))
 
 
-func _train_troop_from_menu(item_id: int) -> void:
-	var troop_ids := TroopCatalog.all_ids()
-	if item_id < 0 or item_id >= troop_ids.size():
-		return
-	var result := village.train_troop(troop_ids[item_id])
+func _build_training_row(troop_id: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var icon := TextureRect.new()
+	icon.texture = objects.preview_art(troop_id)
+	icon.custom_minimum_size = Vector2(46, 46)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	row.add_child(icon)
+	var info := VBoxContainer.new()
+	info.custom_minimum_size = Vector2(230, 0)
+	info.add_theme_constant_override("separation", 0)
+	var name_label := _new_label("", 15, Color("fff2d0"))
+	var detail_label := _new_label("", 11, Color("c9d6c4"))
+	info.add_child(name_label)
+	info.add_child(detail_label)
+	row.add_child(info)
+	var owned_label := _new_label("", 12, Color("e3d7b6"))
+	owned_label.custom_minimum_size = Vector2(70, 0)
+	row.add_child(owned_label)
+	var spin := SpinBox.new()
+	spin.min_value = 1
+	spin.max_value = VillageModel.MAX_TRAIN_BATCH
+	spin.step = 1
+	spin.value = 1
+	spin.custom_minimum_size = Vector2(92, 34)
+	row.add_child(spin)
+	var max_button := _new_button("MAX", _train_set_max.bind(troop_id))
+	max_button.custom_minimum_size = Vector2(52, 34)
+	row.add_child(max_button)
+	var train_button := _new_button("TRAIN", _train_batch.bind(troop_id))
+	train_button.custom_minimum_size = Vector2(150, 34)
+	row.add_child(train_button)
+	spin.value_changed.connect(func(_value: float) -> void: _refresh_training_row(troop_id))
+	_train_rows[troop_id] = {
+		"name": name_label, "detail": detail_label, "owned": owned_label,
+		"spin": spin, "button": train_button,
+	}
+	return row
+
+
+func _open_training_panel() -> void:
+	_refresh_training_panel()
+	_training_panel.visible = true
+
+
+func _close_training_panel() -> void:
+	if _training_panel != null:
+		_training_panel.visible = false
+
+
+func _refresh_training_panel() -> void:
+	_train_elixir_label.text = "ELIXIR  %s" % _format_number(village.elixir)
+	for troop_id in _train_rows:
+		_refresh_training_row(troop_id)
+
+
+func _refresh_training_row(troop_id: String) -> void:
+	var row: Dictionary = _train_rows[troop_id]
+	var definition := TroopCatalog.get_definition(troop_id)
+	var level := village.troop_level(troop_id)
+	var count := int((row["spin"] as SpinBox).value)
+	var total := int(definition["cost"]) * count
+	(row["name"] as Label).text = "%s  Lv %d%s" % [definition["name"], level, "  (flying)" if bool(definition.get("flying", false)) else ""]
+	(row["detail"] as Label).text = "HP %d  •  DMG %d  •  %d elixir each" % [
+		TroopCatalog.hp_at_level(troop_id, level), TroopCatalog.damage_at_level(troop_id, level), definition["cost"],
+	]
+	(row["owned"] as Label).text = "In army: %d" % int(village.army.get(troop_id, 0))
+	var button := row["button"] as Button
+	button.text = "TRAIN %d  •  %s" % [count, _format_number(total)]
+	button.disabled = village.elixir < total
+
+
+func _train_set_max(troop_id: String) -> void:
+	var cost := int(TroopCatalog.get_definition(troop_id)["cost"])
+	var affordable := clampi(int(village.elixir / maxi(cost, 1)), 1, VillageModel.MAX_TRAIN_BATCH)
+	(_train_rows[troop_id]["spin"] as SpinBox).value = affordable
+	_refresh_training_row(troop_id)
+
+
+func _train_batch(troop_id: String) -> void:
+	var count := int((_train_rows[troop_id]["spin"] as SpinBox).value)
+	var result := village.train_troops(troop_id, count)
 	if not result["ok"]:
 		_status_label.text = result["reason"]
+		_refresh_training_panel()
 		return
 	_update_resources()
 	SaveManager.save_village(village)
-	_status_label.text = "%s trained. You now have %d." % [result["troop"]["name"], result["count"]]
+	_refresh_training_panel()
+	_status_label.text = "Trained %d %s. You now have %d." % [result["added"], result["troop"]["name"], result["count"]]
 
 
 func _open_lab_menu() -> void:
