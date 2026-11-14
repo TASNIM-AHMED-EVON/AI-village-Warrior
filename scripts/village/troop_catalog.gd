@@ -1,6 +1,9 @@
 extends RefCounted
 class_name TroopCatalog
 
+const MAX_LEVEL := 10
+const LEVEL_BONUS := 0.20  # +20% hit points and damage per troop level above 1.
+
 const DEFINITIONS := {
 	"warrior": {
 		"name": "Warrior", "hp": 180, "damage": 24, "range": 1,
@@ -37,6 +40,23 @@ const DEFINITIONS := {
 
 static func get_definition(troop_id: String) -> Dictionary:
 	return DEFINITIONS.get(troop_id, {})
+
+
+static func stat_multiplier(level: int) -> float:
+	return 1.0 + LEVEL_BONUS * float(clampi(level, 1, MAX_LEVEL) - 1)
+
+
+static func hp_at_level(troop_id: String, level: int) -> int:
+	return roundi(float(get_definition(troop_id).get("hp", 1)) * stat_multiplier(level))
+
+
+static func damage_at_level(troop_id: String, level: int) -> int:
+	return roundi(float(get_definition(troop_id).get("damage", 1)) * stat_multiplier(level))
+
+
+## Elixir needed to research the next level, given the troop's current level.
+static func upgrade_cost(troop_id: String, level: int) -> int:
+	return int(get_definition(troop_id).get("cost", 20)) * 10 * maxi(level, 1)
 
 
 static func all_ids() -> Array[String]:

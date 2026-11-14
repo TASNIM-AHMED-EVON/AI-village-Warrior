@@ -9,6 +9,7 @@ var gold := 1250
 var elixir := 840
 var gems := 100
 var army: Dictionary = {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
+var troop_levels: Dictionary = {}  # troop_id -> level researched in the Laboratory (missing = level 1)
 var _next_id := 1
 
 const FULL_RESOURCE_AMOUNT := 999999
@@ -19,7 +20,9 @@ func refill_player_inventory() -> void:
 	gold = FULL_RESOURCE_AMOUNT
 	elixir = FULL_RESOURCE_AMOUNT
 	gems = FULL_RESOURCE_AMOUNT
-	army = FULL_ARMY.duplicate(true)
+	# Top up to the starting army but keep any extra troops the player trained.
+	for troop_id in FULL_ARMY:
+		army[troop_id] = maxi(int(army.get(troop_id, 0)), int(FULL_ARMY[troop_id]))
 
 
 func create_starter_layout() -> void:
@@ -53,6 +56,7 @@ func repair_playable_state() -> bool:
 	var saved_elixir := elixir
 	var saved_gems := gems
 	var saved_army := army.duplicate(true)
+	var saved_levels := troop_levels.duplicate(true)
 	var has_town_hall := false
 	for structure in structures:
 		if structure.get("type", "") == "town_hall":
@@ -65,6 +69,7 @@ func repair_playable_state() -> bool:
 		elixir = saved_elixir
 		gems = saved_gems
 		army = saved_army
+		troop_levels = saved_levels
 		repaired = true
 	var total_troops := 0
 	for troop_id in TroopCatalog.all_ids():
@@ -194,6 +199,45 @@ func train_troop(troop_id: String) -> Dictionary:
 	return {"ok": true, "troop": definition, "count": army[troop_id]}
 
 
+func troop_level(troop_id: String) -> int:
+	return clampi(int(troop_levels.get(troop_id, 1)), 1, TroopCatalog.MAX_LEVEL)
+
+
+func laboratory_level() -> int:
+	var best := 0
+	for structure in structures:
+		if structure["type"] == "laboratory":
+			best = maxi(best, int(structure.get("level", 1)))
+	return best
+
+
+## Highest troop level the current Laboratory can research (0 when there is no Laboratory).
+func max_troop_level() -> int:
+	var lab_level := laboratory_level()
+	if lab_level == 0:
+		return 0
+	return mini(TroopCatalog.MAX_LEVEL, lab_level + 2)
+
+
+func upgrade_troop(troop_id: String) -> Dictionary:
+	var definition := TroopCatalog.get_definition(troop_id)
+	if definition.is_empty():
+		return {"ok": false, "reason": "Unknown troop type."}
+	if laboratory_level() == 0:
+		return {"ok": false, "reason": "Build a Laboratory before researching troops."}
+	var level := troop_level(troop_id)
+	if level >= TroopCatalog.MAX_LEVEL:
+		return {"ok": false, "reason": "%s is already at the maximum level." % definition["name"]}
+	if level >= max_troop_level():
+		return {"ok": false, "reason": "Upgrade the Laboratory to research %s beyond level %d." % [definition["name"], level]}
+	var cost := TroopCatalog.upgrade_cost(troop_id, level)
+	if elixir < cost:
+		return {"ok": false, "reason": "Research needs %d elixir." % cost}
+	elixir -= cost
+	troop_levels[troop_id] = level + 1
+	return {"ok": true, "troop": definition, "level": level + 1, "cost": cost}
+
+
 func move_unit(unit_id: String, destination: Vector2i) -> Dictionary:
 	if not grid.contains_cell(destination):
 		return {"ok": false, "reason": "That destination is outside the village."}
@@ -243,6 +287,7 @@ func serialize() -> Dictionary:
 		"version": 1,
 		"resources": {"gold": gold, "elixir": elixir, "gems": gems},
 		"army": army.duplicate(true),
+		"troop_levels": troop_levels.duplicate(true),
 		"grid": grid.to_dict(),
 		"structures": serialized_structures,
 		"units": serialized_units,
@@ -315,6 +360,13 @@ func deserialize(source: Dictionary) -> bool:
 	var saved_army: Dictionary = source.get("army", {})
 	for troop_id in TroopCatalog.all_ids():
 		army[troop_id] = maxi(0, int(saved_army.get(troop_id, army[troop_id])))
+	troop_levels = {}
+	var saved_levels: Variant = source.get("troop_levels", {})
+	if saved_levels is Dictionary:
+		for troop_id in TroopCatalog.all_ids():
+			var saved_level := clampi(int(saved_levels.get(troop_id, 1)), 1, TroopCatalog.MAX_LEVEL)
+			if saved_level > 1:
+				troop_levels[troop_id] = saved_level
 	_next_id = max_id + 1
 	return true
 

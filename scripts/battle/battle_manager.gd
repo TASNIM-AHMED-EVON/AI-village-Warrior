@@ -17,7 +17,7 @@ signal destruction_event(world_position: Vector2)
 
 const BATTLE_DURATION := 180.0
 const DEPLOYMENT_CLEARANCE_TILES := 5
-const ARMY_LIMIT := 29
+const ARMY_LIMIT := 29  # Minimum deploy cap; grows if the player trained a bigger army.
 const TROOP_STOCK := {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
 ## Planning is the expensive part of a battle (a pathfinding search per candidate target), so planned
 ## re-evaluations are queued and served a few per frame instead of all in one frame.
@@ -78,6 +78,7 @@ var _regions_valid := false
 ## The one wall every troop attacks while the base is sealed, so a single gap opens quickly instead of
 ## troops chewing through different walls. Cleared when that wall falls.
 var _breach_wall_id := ""
+var army_limit := ARMY_LIMIT
 
 
 func begin_battle(enemy_village: VillageModel, actor_root: Node2D, target_root: Node2D) -> void:
@@ -89,6 +90,10 @@ func begin_battle(enemy_village: VillageModel, actor_root: Node2D, target_root: 
 	speed_multiplier = 1.0
 	deployed_counts.clear()
 	troop_stock = village.army.duplicate(true)
+	var stock_total := 0
+	for stocked in troop_stock.values():
+		stock_total += int(stocked)
+	army_limit = maxi(ARMY_LIMIT, stock_total)
 	attacker_units.clear()
 	building_targets.clear()
 	tower_cooldowns.clear()
@@ -138,7 +143,7 @@ func deploy(troop_id: String, cell: Vector2i) -> bool:
 	if not troop_stock.has(troop_id) or int(troop_stock[troop_id]) <= 0:
 		status_message.emit("No %s troops remain." % troop_id.capitalize())
 		return false
-	if total_deployed >= ARMY_LIMIT:
+	if total_deployed >= army_limit:
 		status_message.emit("Army capacity reached.")
 		return false
 	if not _is_valid_deployment_cell(cell):
@@ -146,7 +151,7 @@ func deploy(troop_id: String, cell: Vector2i) -> bool:
 		return false
 	var actor := TroopActor.new()
 	actor.name = "Attacker_%s_%d" % [troop_id, attacker_units.size() + 1]
-	if not actor.configure(troop_id):
+	if not actor.configure(troop_id, village.troop_level(troop_id)):
 		actor.free()
 		return false
 	actor.global_position = village.grid.cell_to_world(Vector2(cell))

@@ -8,6 +8,7 @@ const ART_PATHS := {
 	"cannon": "res://assets/buildings/cannon_sprite.png",
 	"archer_tower": "res://assets/buildings/archer_tower_sprite.png",
 	"clan_castle": "res://assets/buildings/clan_castle_sprite.png",
+	"laboratory": "res://assets/generated/laboratory_sprite.png",
 	"gold_mine": "res://assets/buildings/gold_mine_sprite.png",
 	"elixir_pump": "res://assets/buildings/elixir_pump_sprite.png",
 	"wall": "res://assets/generated/stone_wall.png",
@@ -20,6 +21,7 @@ const ART_PATHS := {
 const DIMENSIONS := {
 	"town_hall": Vector2(235, 211),
 	"barracks": Vector2(228, 153),
+	"laboratory": Vector2(228, 153),
 	"cannon": Vector2(106, 91),
 	"archer_tower": Vector2(142, 201),
 	"clan_castle": Vector2(253, 192),

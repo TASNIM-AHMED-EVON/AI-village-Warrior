@@ -39,6 +39,12 @@ const DEFINITIONS := {
 		"color": Color("9d6747"), "accent": Color("e8bd72"), "category": "Army",
 		"description": "A training ground for village troops.",
 	},
+	"laboratory": {
+		"name": "Laboratory", "footprint": Vector2i(3, 2), "hp": 450,
+		"cost": 900,
+		"color": Color("6a58a8"), "accent": Color("c9b6ff"), "category": "Army",
+		"description": "Research stronger troops. A higher Laboratory level unlocks higher troop levels.",
+	},
 	"clan_castle": {
 		"name": "Clan Castle", "footprint": Vector2i(3, 3), "hp": 900,
 		"cost": 800, "capacity": 12,

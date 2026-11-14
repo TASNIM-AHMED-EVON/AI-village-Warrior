@@ -44,7 +44,7 @@ func _ready() -> void:
 	if saved is VillageModel: home_village = saved
 	else: home_village.create_starter_layout()
 	var recovered_save := home_village.repair_playable_state()
-	# Battle may be opened directly or after a previously depleted attack; always start fully stocked.
+	# Tops resources and the starting army back up; troops the player trained are kept.
 	home_village.refill_player_inventory()
 	SaveManager.save_village(home_village)
 	# The battle damages and deletes buildings, so it runs on a copy of the saved layout.
@@ -252,7 +252,7 @@ func _update_hud() -> void:
 		var stock := int(battle.troop_stock.get(id, 0))
 		b.disabled = stock <= 0 or battle.phase >= BattleManager.Phase.VICTORY
 		b.button_pressed = id == selected
-		_card_counts[id].text = "%d available" % stock
+		_card_counts[id].text = "%d available  Lv %d" % [stock, village.troop_level(id)]
 		_card_icons[id].modulate = Color.WHITE if stock > 0 else Color(0.62, 0.62, 0.62, 0.78)
 
 func _update_stats() -> void:

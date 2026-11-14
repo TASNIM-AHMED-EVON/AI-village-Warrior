@@ -1,7 +1,7 @@
 extends Node2D
 
 const UI_THEME := preload("res://themes/medieval_ui.tres")
-const BUILD_OPTIONS := ["cannon", "archer_tower", "clan_castle", "gold_mine", "elixir_pump", "barracks", "wall"]
+const BUILD_OPTIONS := ["cannon", "archer_tower", "clan_castle", "gold_mine", "elixir_pump", "barracks", "laboratory", "wall"]
 const BUILDING_ART := {
 	"town_hall": "res://assets/buildings/town_hall_sprite.png",
 	"barracks": "res://assets/buildings/barracks_sprite.png",
@@ -9,6 +9,7 @@ const BUILDING_ART := {
 	"wall": "res://assets/generated/stone_wall.png",
 	"archer_tower": "res://assets/buildings/archer_tower_sprite.png",
 	"clan_castle": "res://assets/buildings/clan_castle_sprite.png",
+	"laboratory": "res://assets/generated/laboratory_sprite.png",
 	"gold_mine": "res://assets/buildings/gold_mine_sprite.png",
 	"elixir_pump": "res://assets/buildings/elixir_pump_sprite.png",
 }
@@ -36,6 +37,7 @@ var _gold_label: Label
 var _elixir_label: Label
 var _gems_label: Label
 var _training_menu: PopupMenu
+var _lab_menu: PopupMenu
 
 
 func _ready() -> void:
@@ -150,8 +152,8 @@ func _build_hud() -> void:
 	_build_panel.anchor_top = 1.0
 	_build_panel.anchor_right = 0.5
 	_build_panel.anchor_bottom = 1.0
-	_build_panel.offset_left = -420
-	_build_panel.offset_right = 420
+	_build_panel.offset_left = -520
+	_build_panel.offset_right = 520
 	_build_panel.offset_top = -178
 	_build_panel.offset_bottom = -92
 	_build_panel.visible = false
@@ -162,7 +164,7 @@ func _build_hud() -> void:
 	for building_id in BUILD_OPTIONS:
 		var definition := BuildingCatalog.get_definition(building_id)
 		var button := _new_button("+  %s\n%d gold" % [definition["name"], definition["cost"]], _select_building.bind(building_id))
-		button.custom_minimum_size = Vector2(126, 62)
+		button.custom_minimum_size = Vector2(116, 62)
 		button.icon = objects.preview_art(building_id)
 		button.expand_icon = true
 		button.add_theme_constant_override("icon_max_width", 44)
@@ -209,6 +211,9 @@ func _build_hud() -> void:
 	_training_menu = PopupMenu.new()
 	_training_menu.id_pressed.connect(_train_troop_from_menu)
 	hud.add_child(_training_menu)
+	_lab_menu = PopupMenu.new()
+	_lab_menu.id_pressed.connect(_research_troop_from_menu)
+	hud.add_child(_lab_menu)
 
 	_debug_label = _new_label("", 13, Color("b7ffc4"))
 	_debug_label.position = Vector2(18, 90)
@@ -282,8 +287,8 @@ func _get_unit_at(_cell: Vector2i) -> Dictionary:
 func _update_hover() -> void:
 	if not moving_object_id.is_empty():
 		var moving_cell := village.grid.world_to_cell(get_global_mouse_position())
-		var footprint: Vector2i = selected_object.get("footprint", Vector2i.ONE)
-		grid_overlay.set_preview(moving_cell, footprint, village.can_move_structure(moving_object_id, moving_cell))
+		var move_footprint: Vector2i = selected_object.get("footprint", Vector2i.ONE)
+		grid_overlay.set_preview(moving_cell, move_footprint, village.can_move_structure(moving_object_id, moving_cell))
 		return
 	if not build_mode or selected_building_id.is_empty():
 		return
@@ -305,7 +310,7 @@ func _set_build_mode(enabled: bool) -> void:
 	grid_overlay.set_preview_art(null)
 	grid_overlay.set_preview(Vector2i(-1, -1), Vector2i.ONE, false)
 	selected_building_id = ""
-	selected_object.clear()
+	selected_object = {}  # Never .clear(): this dictionary is the live building data.
 	objects.selected_id = ""
 	objects.refresh()
 	if build_mode:
@@ -330,7 +335,7 @@ func _select_building(building_id: String) -> void:
 func _deselect() -> void:
 	if not moving_object_id.is_empty():
 		_end_move()
-	selected_object.clear()
+	selected_object = {}  # Never .clear(): this dictionary is the live building data.
 	objects.selected_id = ""
 	objects.refresh()
 	_update_selection_panel()
@@ -370,12 +375,19 @@ func _update_selection_panel() -> void:
 	var structure_type := str(selected_object.get("type", ""))
 	var selected_id := str(selected_object.get("id", ""))
 	if not BuildingCatalog.get_definition(structure_type).is_empty():
+		var current_max_hp := int(selected_object.get("max_hp", 0))
+		_selection_text.text += "\nNext level (%d)  HP %d" % [
+			int(selected_object.get("level", 1)) + 1, current_max_hp + maxi(60, int(current_max_hp / 5.0)),
+		]
 		_selection_actions.add_child(_new_button("UPGRADE  •  %d gold" % (400 * int(selected_object.get("level", 1))), _upgrade_selected.bind(selected_id)))
 		_selection_actions.add_child(_new_button("MOVE", _start_move.bind(selected_id)))
 		if structure_type == "gold_mine" or structure_type == "elixir_pump":
 			_selection_actions.add_child(_new_button("COLLECT", _collect_selected.bind(selected_id)))
 		elif structure_type == "barracks":
 			_selection_actions.add_child(_new_button("TRAIN TROOPS", _open_training_menu))
+		elif structure_type == "laboratory":
+			_selection_text.text += "\n\nTroops can be researched up to level %d." % village.max_troop_level()
+			_selection_actions.add_child(_new_button("RESEARCH TROOPS", _open_lab_menu))
 		elif structure_type == ClanCastle.BUILDING_ID:
 			var garrison: Dictionary = selected_object.get("garrison", {})
 			var preset_index := ClanCastle.preset_index_of(garrison)
@@ -488,7 +500,7 @@ func _open_training_menu() -> void:
 	for index in range(TroopCatalog.all_ids().size()):
 		var troop_id := TroopCatalog.all_ids()[index]
 		var definition := TroopCatalog.get_definition(troop_id)
-		_training_menu.add_item("%s  •  %d elixir" % [definition["name"], definition["cost"]], index)
+		_training_menu.add_item("%s  Lv %d  •  %d elixir" % [definition["name"], village.troop_level(troop_id), definition["cost"]], index)
 	_training_menu.position = Vector2i(DisplayServer.mouse_get_position())
 	_training_menu.popup()
 
@@ -502,7 +514,44 @@ func _train_troop_from_menu(item_id: int) -> void:
 		_status_label.text = result["reason"]
 		return
 	_update_resources()
+	SaveManager.save_village(village)
 	_status_label.text = "%s trained. You now have %d." % [result["troop"]["name"], result["count"]]
+
+
+func _open_lab_menu() -> void:
+	_lab_menu.clear()
+	var troop_ids := TroopCatalog.all_ids()
+	for index in range(troop_ids.size()):
+		var troop_id := troop_ids[index]
+		var definition := TroopCatalog.get_definition(troop_id)
+		var level := village.troop_level(troop_id)
+		if level >= TroopCatalog.MAX_LEVEL:
+			_lab_menu.add_item("%s  Lv %d  (MAX)" % [definition["name"], level], index)
+			_lab_menu.set_item_disabled(index, true)
+			continue
+		_lab_menu.add_item("%s  Lv %d → %d   HP %d → %d   DMG %d → %d  •  %d elixir" % [
+			definition["name"], level, level + 1,
+			TroopCatalog.hp_at_level(troop_id, level), TroopCatalog.hp_at_level(troop_id, level + 1),
+			TroopCatalog.damage_at_level(troop_id, level), TroopCatalog.damage_at_level(troop_id, level + 1),
+			TroopCatalog.upgrade_cost(troop_id, level),
+		], index)
+		_lab_menu.set_item_disabled(index, level >= village.max_troop_level())
+	_lab_menu.position = Vector2i(DisplayServer.mouse_get_position())
+	_lab_menu.popup()
+
+
+func _research_troop_from_menu(item_id: int) -> void:
+	var troop_ids := TroopCatalog.all_ids()
+	if item_id < 0 or item_id >= troop_ids.size():
+		return
+	var result := village.upgrade_troop(troop_ids[item_id])
+	if not result["ok"]:
+		_status_label.text = result["reason"]
+		return
+	_update_resources()
+	_update_selection_panel()
+	SaveManager.save_village(village)
+	_status_label.text = "%s upgraded to level %d: more hit points and damage in battle." % [result["troop"]["name"], result["level"]]
 
 
 func _update_resources() -> void:
@@ -529,7 +578,7 @@ func _load_village() -> void:
 		_status_label.text = "No valid saved village found yet."
 		return
 	village = loaded_village
-	selected_object.clear()
+	selected_object = {}  # Never .clear(): this dictionary is the live building data.
 	selected_building_id = ""
 	objects.selected_id = ""
 	objects.set_village(village)

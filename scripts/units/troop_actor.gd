@@ -11,6 +11,7 @@ signal state_changed(previous_state: State, new_state: State)
 
 var troop_id := "warrior"
 var display_name := "Warrior"
+var troop_level := 1
 var max_hp := 1
 var hp := 1
 var damage := 1
@@ -54,16 +55,17 @@ const SPRITES := {
 }
 
 
-func configure(unit_type: String) -> bool:
+func configure(unit_type: String, level: int = 1) -> bool:
 	var definition := TroopCatalog.get_definition(unit_type)
 	if definition.is_empty():
 		push_warning("Unknown troop type '%s'." % unit_type)
 		return false
 	troop_id = unit_type
 	display_name = definition["name"]
-	max_hp = int(definition["hp"])
+	troop_level = clampi(level, 1, TroopCatalog.MAX_LEVEL)
+	max_hp = TroopCatalog.hp_at_level(unit_type, troop_level)
 	hp = max_hp
-	damage = int(definition["damage"])
+	damage = TroopCatalog.damage_at_level(unit_type, troop_level)
 	attack_range = float(definition["range"]) * 48.0
 	move_speed = float(definition["move_speed"])
 	attack_interval = float(definition["attack_speed"])
