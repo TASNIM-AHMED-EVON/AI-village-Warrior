@@ -398,6 +398,11 @@ func deserialize(source: Dictionary) -> bool:
 	return true
 
 
+## Public wrapper used by fixed layouts such as the AI Trial village. Asserts the placement is valid.
+func add_layout_structure(building_id: String, cell: Vector2i) -> void:
+	_add_structure(building_id, cell)
+
+
 func _add_structure(building_id: String, cell: Vector2i) -> void:
 	var definition := BuildingCatalog.get_definition(building_id)
 	var object_id := "structure_%d" % _next_id

@@ -143,7 +143,8 @@ func _build_hud() -> void:
 	attack_actions.anchor_bottom = 1.0
 	attack_actions.offset_left = 18
 	attack_actions.offset_top = -74
-	attack_actions.offset_right = 188
+	attack_actions.offset_right = 388
+	attack_actions.add_theme_constant_override("separation", 10)
 	attack_actions.offset_bottom = -14
 	hud.add_child(attack_actions)
 	var attack_button := _new_button("ATTACK!", _start_battle)
@@ -152,6 +153,13 @@ func _build_hud() -> void:
 	attack_button.add_theme_stylebox_override("normal", _button_style(Color("a84430")))
 	attack_button.add_theme_stylebox_override("hover", _button_style(Color("c85b3c")))
 	attack_actions.add_child(attack_button)
+	var trial_button := _new_button("AI TRIAL", _start_trial)
+	trial_button.custom_minimum_size = Vector2(190, 54)
+	trial_button.add_theme_color_override("font_color", Color(0.86, 0.95, 1.0))
+	trial_button.add_theme_stylebox_override("normal", _button_style(Color("2f5f8f")))
+	trial_button.add_theme_stylebox_override("hover", _button_style(Color("3f7cb8")))
+	trial_button.tooltip_text = "Watch the AI attack a fixed fortress village on its own and try for 3 stars."
+	attack_actions.add_child(trial_button)
 
 	_build_panel = PanelContainer.new()
 	_build_panel.anchor_left = 0.5
@@ -470,6 +478,12 @@ func _reset_levels() -> void:
 func _return_to_menu() -> void:
 	SaveManager.save_village(village)
 	SceneManager.change_to(SceneManager.MAIN_MENU, GameManager.GameState.MAIN_MENU)
+
+
+func _start_trial() -> void:
+	SaveManager.save_village(village)
+	GameManager.trial_mode = true
+	SceneManager.change_to(SceneManager.BATTLE, GameManager.GameState.BATTLE_DEPLOYMENT)
 
 
 func _start_battle() -> void:

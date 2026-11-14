@@ -80,6 +80,7 @@ func _build_menu() -> void:
 	content.add_spacer(false)
 	_add_button(content, "  PLAY  ·  ENTER VILLAGE", _open_village, 56)
 	_add_button(content, "  BATTLE  ·  TEST YOUR TACTICS", _open_battle, 50)
+	_add_button(content, "  AI TRIAL  ·  WATCH AI vs AI", _open_trial, 50)
 	_add_button(content, "  AI LAB  ·  EXPLORE ALGORITHMS", _open_arena, 50)
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
@@ -155,6 +156,11 @@ func _open_village() -> void:
 
 
 func _open_battle() -> void:
+	SceneManager.change_to(SceneManager.BATTLE, GameManager.GameState.BATTLE_DEPLOYMENT)
+
+
+func _open_trial() -> void:
+	GameManager.trial_mode = true
 	SceneManager.change_to(SceneManager.BATTLE, GameManager.GameState.BATTLE_DEPLOYMENT)
 
 

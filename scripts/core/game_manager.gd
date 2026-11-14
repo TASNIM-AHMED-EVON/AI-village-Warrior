@@ -18,6 +18,9 @@ enum GameState {
 signal state_changed(previous_state: GameState, new_state: GameState)
 
 var current_state: GameState = GameState.MAIN_MENU
+## Set just before opening the battle scene to start the AI Trial (AI vs AI) instead of a normal attack.
+## The battle scene reads it once and clears it.
+var trial_mode := false
 
 
 func set_state(new_state: GameState) -> void:

@@ -14,6 +14,7 @@ TESTS = [
     'tests/ai/test_adversarial_search.gd',
     'tests/battle/test_battle_rules.gd',
     'tests/battle/test_clan_castle.gd',
+    'tests/battle/test_trial_commander.gd',
     'tests/battle/test_wall_breach.gd',
     'tests/battle/test_attack_visuals.gd',
     'tests/battle/test_battle_frames.gd',

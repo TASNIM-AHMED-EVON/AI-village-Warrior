@@ -39,19 +39,36 @@ var _effects
 var _pending_hit_delay := 0.0
 var _pending_hit_kind := ""
 var _last_hud_frame := -100
+## AI Trial (AI vs AI): the AI plays the attacker on a fixed village and the player only watches.
+var _is_trial := false
+var _commander: AttackCommander
+var _commander_log: Label
+var _briefing_label: Label
+var _trial_age := 0.0
+var _pings: Array[Dictionary] = []
+var _seen_deployments := 0
+var _hud_root: Control
+var _commander_canvas: Node2D
 
 func _ready() -> void:
-	var saved: Variant = SaveManager.load_village()
-	if saved is VillageModel: home_village = saved
-	else: home_village.create_starter_layout()
-	var recovered_save := home_village.repair_playable_state()
-	# Tops resources and the starting army back up; troops the player trained are kept.
-	home_village.refill_player_inventory()
-	SaveManager.save_village(home_village)
-	# The battle damages and deletes buildings, so it runs on a copy of the saved layout.
-	village = VillageModel.new()
-	if not village.deserialize(home_village.serialize()):
-		village = home_village
+	_is_trial = GameManager.trial_mode
+	GameManager.trial_mode = false
+	var recovered_save := false
+	if _is_trial:
+		# The trial uses its own fixed fortress; the player's saved village is never read or written.
+		village = TrialVillage.build()
+	else:
+		var saved: Variant = SaveManager.load_village()
+		if saved is VillageModel: home_village = saved
+		else: home_village.create_starter_layout()
+		recovered_save = home_village.repair_playable_state()
+		# Tops resources and the starting army back up; troops the player trained are kept.
+		home_village.refill_player_inventory()
+		SaveManager.save_village(home_village)
+		# The battle damages and deletes buildings, so it runs on a copy of the saved layout.
+		village = VillageModel.new()
+		if not village.deserialize(home_village.serialize()):
+			village = home_village
 	objects.battle_mode = true
 	objects.set_village(village)
 	terrain.set_village(village)
@@ -77,8 +94,114 @@ func _ready() -> void:
 	add_child(_effects)
 	GameManager.set_state(GameManager.GameState.BATTLE_DEPLOYMENT)
 	_build_hud()
+	if _is_trial:
+		_start_trial_commander()
 	if recovered_save:
 		_set_status("Your saved village was empty or out of troops, so it has been restored for this battle.")
+
+func _start_trial_commander() -> void:
+	battle.set_speed(2.0)
+	_commander_canvas = load("res://scripts/battle/commander_overlay.gd").new()
+	_commander_canvas.name = "CommanderOverlay"
+	_commander_canvas.z_index = 2
+	_commander_canvas.painter = _draw_commander_overlay
+	add_child(_commander_canvas)
+	_commander = AttackCommander.new()
+	_commander.setup(battle)
+	_commander.decided.connect(_on_commander_decided)
+	_build_commander_panel()
+	_set_status("The AI commander is studying the fortress. Watch it choose where to attack.")
+	if _commander_canvas != null:
+		_commander_canvas.queue_redraw()
+
+
+func _build_commander_panel() -> void:
+	var panel := PanelContainer.new()
+	panel.offset_left = 16
+	panel.offset_top = 82
+	panel.offset_right = 420
+	panel.custom_minimum_size = Vector2(404, 0)
+	_hud_root.add_child(panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	panel.add_child(column)
+	column.add_child(_label("AI COMMANDER", 17, Color("f2d078")))
+	_briefing_label = _label("\n".join(_commander.briefing), 12, Color("dfe9d4"))
+	_briefing_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_briefing_label.custom_minimum_size = Vector2(380, 0)
+	column.add_child(_briefing_label)
+	column.add_child(HSeparator.new())
+	column.add_child(_label("LIVE DECISIONS", 14, Color("a6e7a9")))
+	_commander_log = _label("Waiting for the first move…", 11, Color("f3e5bb"))
+	_commander_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_commander_log.custom_minimum_size = Vector2(380, 0)
+	column.add_child(_commander_log)
+
+
+func _on_commander_decided(_text: String) -> void:
+	if _commander_log == null:
+		return
+	var lines: Array[String] = []
+	var start := maxi(0, _commander.log_lines.size() - 8)
+	for index in range(start, _commander.log_lines.size()):
+		lines.append("• " + _commander.log_lines[index])
+	_commander_log.text = "\n".join(lines)
+
+
+func _process(delta: float) -> void:
+	# Projectiles slow down, speed up and freeze together with the battle.
+	if _effects != null and battle != null:
+		_effects.time_scale = battle.visual_time_scale()
+	if not _is_trial or _commander == null or battle == null:
+		return
+	_trial_age += delta
+	if battle.phase != BattleManager.Phase.PAUSED:
+		var step := delta if battle.phase == BattleManager.Phase.DEPLOYMENT else delta * battle.speed_multiplier
+		_commander.tick(step)
+	# Ping every troop the commander just sent.
+	while _seen_deployments < _commander.deployments.size():
+		var entry: Dictionary = _commander.deployments[_seen_deployments]
+		_pings.append({"cell": entry["cell"], "age": 0.0, "troop": entry["troop"]})
+		AudioManager.play_sfx("troop_deploy")
+		_seen_deployments += 1
+		if _briefing_label != null and _commander.briefing.size() >= 2:
+			# Once the attack is under way, shrink the long analysis down to the decision itself.
+			_briefing_label.text = "\n".join(_commander.briefing.slice(_commander.briefing.size() - 2))
+	for ping in _pings:
+		ping["age"] = float(ping["age"]) + delta
+	while not _pings.is_empty() and float(_pings[0]["age"]) > 1.4:
+		_pings.pop_front()
+	if _commander_canvas != null:
+		_commander_canvas.queue_redraw()
+
+
+## The AI's analysis, drawn on the map: a heatmap of how much fire each possible deploy tile is under,
+## then a ring on every tile it actually chooses.
+func _draw_commander_overlay(canvas: Node2D) -> void:
+	if _commander == null:
+		return
+	var heat_alpha := 0.0
+	if battle.phase == BattleManager.Phase.DEPLOYMENT:
+		heat_alpha = 1.0
+	elif _trial_age < 14.0:
+		heat_alpha = clampf(1.0 - (_trial_age - 8.0) / 6.0, 0.0, 1.0) * 0.8
+	if heat_alpha > 0.01:
+		for entry in _commander.heatmap:
+			var point := village.grid.cell_to_world(Vector2(entry["cell"]))
+			var danger := clampf(float(entry["exposure"]) / maxf(_commander.max_exposure, 1.0), 0.0, 1.0)
+			var color := Color(0.18, 0.88, 0.45).lerp(Color(0.95, 0.16, 0.10), danger)
+			color.a = (0.38 + 0.30 * danger) * heat_alpha
+			canvas.draw_colored_polygon(PackedVector2Array([point + Vector2(0, -12), point + Vector2(24, 0), point + Vector2(0, 12), point + Vector2(-24, 0)]), color)
+	for ping in _pings:
+		var age := float(ping["age"])
+		var point := village.grid.cell_to_world(Vector2(ping["cell"]))
+		var fade := clampf(1.0 - age / 1.4, 0.0, 1.0)
+		var ring := Vector2(22.0 + 46.0 * age, 11.0 + 23.0 * age)
+		var points := PackedVector2Array()
+		for i in range(25):
+			var angle := TAU * float(i) / 24.0
+			points.append(point + Vector2(cos(angle) * ring.x, sin(angle) * ring.y))
+		canvas.draw_polyline(points, Color(0.55, 0.9, 1.0, 0.9 * fade), 3.0, true)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("debug_overlay"):
@@ -89,7 +212,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		_preview = village.grid.world_to_cell(get_global_mouse_position())
 		queue_redraw()
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and not _result.visible:
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and not _result.visible and not _is_trial:
 		var cell := village.grid.world_to_cell(get_global_mouse_position())
 		if battle.deploy(selected, cell):
 			AudioManager.play_sfx("troop_deploy")
@@ -102,6 +225,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_set_status("Battle paused. Press Resume to continue.")
 
 func _draw() -> void:
+	if _is_trial:
+		return
 	if _preview.x < 0 or not village.grid.contains_cell(_preview): return
 	var p := village.grid.cell_to_world(Vector2(_preview))
 	var shape := PackedVector2Array([p + Vector2(0,-12), p + Vector2(24,0), p + Vector2(0,12), p + Vector2(-24,0)])
@@ -120,6 +245,7 @@ func _build_hud() -> void:
 	hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hud.mouse_filter = Control.MOUSE_FILTER_PASS
 	layer.add_child(hud)
+	_hud_root = hud
 	var top := PanelContainer.new()
 	top.anchor_right = 1.0
 	top.offset_left = 16
@@ -129,7 +255,7 @@ func _build_hud() -> void:
 	hud.add_child(top)
 	var row := HBoxContainer.new()
 	top.add_child(row)
-	row.add_child(_label("AI VILLAGE WARS - ATTACK", 18, Color("a6e7a9")))
+	row.add_child(_label("AI TRIAL - AI vs AI" if _is_trial else "AI VILLAGE WARS - ATTACK", 18, Color("a6e7a9")))
 	_stats = _label("", 16, Color("f3e5bb"))
 	row.add_child(_stats)
 	var spacer := Control.new()
@@ -140,7 +266,7 @@ func _build_hud() -> void:
 	row.add_child(_button("2x", func(): battle.set_speed(2.0)))
 	row.add_child(_button("3x", func(): battle.set_speed(3.0)))
 	row.add_child(_button("5x", func(): battle.set_speed(5.0)))
-	row.add_child(_button("RETREAT", _retreat))
+	row.add_child(_button("EXIT TRIAL" if _is_trial else "RETREAT", _retreat))
 	_debug_panel = PanelContainer.new()
 	_debug_panel.anchor_left = 1.0
 	_debug_panel.anchor_right = 1.0
@@ -251,7 +377,7 @@ func _update_hud() -> void:
 	for id in TROOPS:
 		var b: Button = _cards[id]
 		var stock := int(battle.troop_stock.get(id, 0))
-		b.disabled = stock <= 0 or battle.phase >= BattleManager.Phase.VICTORY
+		b.disabled = stock <= 0 or battle.phase >= BattleManager.Phase.VICTORY or _is_trial
 		b.button_pressed = id == selected
 		_card_counts[id].text = "%d available  Lv %d" % [stock, village.troop_level(id)]
 		_card_icons[id].modulate = Color.WHITE if stock > 0 else Color(0.62, 0.62, 0.62, 0.78)
@@ -342,17 +468,23 @@ func _set_status(message: String) -> void:
 func _finish(result: Dictionary) -> void:
 	GameManager.set_state(GameManager.GameState.BATTLE_RESULT)
 	# Keep the undamaged home layout; only the loot carries back to the village.
-	home_village.gold += int(result.get("loot_gold", 0))
-	home_village.elixir += int(result.get("loot_elixir", 0))
-	SaveManager.save_village(home_village)
+	if not _is_trial:
+		home_village.gold += int(result.get("loot_gold", 0))
+		home_village.elixir += int(result.get("loot_elixir", 0))
+		SaveManager.save_village(home_village)
 	var box := VBoxContainer.new()
 	_result.add_child(box)
 	var title := "VICTORY" if result.phase == "VICTORY" else ("TIME UP" if result.phase == "TIMEOUT" else "DEFEAT")
 	box.add_child(_label(title, 28, Color("f3d782")))
 	box.add_child(_label("%d / 3 STARS  •  %d%% destruction" % [result["stars"], result["destruction_percent"]], 17, Color("edf4df")))
-	box.add_child(_label("+%d gold     +%d elixir" % [result["loot_gold"], result["loot_elixir"]], 16, Color("f3d782")))
+	if _is_trial:
+		box.add_child(_label("The AI commander deployed %d troops on its own." % battle.total_deployed, 15, Color("c7d8ff")))
+	else:
+		box.add_child(_label("+%d gold     +%d elixir" % [result["loot_gold"], result["loot_elixir"]], 16, Color("f3d782")))
 	if int(result.get("defenders_released", 0)) > 0:
 		box.add_child(_label("Clan Castle defenders beaten: %d / %d" % [result["defenders_defeated"], result["defenders_released"]], 15, Color("c7d8ff")))
+	if _is_trial:
+		box.add_child(_button("RUN TRIAL AGAIN", _replay_trial))
 	box.add_child(_button("RETURN TO VILLAGE", _retreat))
 	_result.visible = true
 	_result.modulate.a = 0.0
@@ -364,8 +496,14 @@ func _finish(result: Dictionary) -> void:
 	AudioManager.play_sfx("victory" if result.phase == "VICTORY" else "defeat")
 	_update_hud()
 
+func _replay_trial() -> void:
+	GameManager.trial_mode = true
+	SceneManager.change_to(SceneManager.BATTLE, GameManager.GameState.BATTLE_DEPLOYMENT)
+
+
 func _retreat() -> void:
-	SaveManager.save_village(home_village)
+	if not _is_trial:
+		SaveManager.save_village(home_village)
 	SceneManager.change_to(SceneManager.VILLAGE, GameManager.GameState.VILLAGE)
 
 func _label(text_value: String, size: int, color: Color) -> Label:
@@ -433,12 +571,6 @@ func _toggle_path_visualization() -> void:
 	_overlay.refresh()
 	_set_status("F4  ·  Search paths %s. F3 opens AI details." % ("ON" if battle.visualization_enabled else "OFF"))
 	_update_debug_panel()
-
-
-func _process(_delta: float) -> void:
-	# Projectiles slow down, speed up and freeze together with the battle.
-	if _effects != null and battle != null:
-		_effects.time_scale = battle.visual_time_scale()
 
 
 func _on_projectile_event(kind: String, from_position: Vector2, to_position: Vector2, flight_time: float) -> void:
