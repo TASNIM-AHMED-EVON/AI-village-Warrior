@@ -79,6 +79,10 @@ var _regions_valid := false
 ## troops chewing through different walls. Cleared when that wall falls.
 var _breach_wall_id := ""
 var army_limit := ARMY_LIMIT
+## Attack spots (grid cells) already taken by a ground troop, so a group fans out around a building.
+var _slot_claims: Dictionary = {}
+const SEPARATION_RADIUS := 22.0
+const AIR_SEPARATION_RADIUS := 46.0
 
 
 func begin_battle(enemy_village: VillageModel, actor_root: Node2D, target_root: Node2D) -> void:
@@ -268,6 +272,7 @@ func _process(delta: float) -> void:
 	_update_attacker_chase(sim_delta)
 	_update_attacker_awareness(sim_delta)
 	_process_replan_queue()
+	_separate_troops(sim_delta)
 	if initial_building_count > 0 and destroyed_count >= initial_building_count:
 		_finish(Phase.VICTORY)
 	elif time_remaining <= 0.0:
@@ -352,6 +357,8 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 	if candidate_paths.has(target_id):
 		chosen_path = candidate_paths[target_id]
 	actor.set_walk_path(chosen_path, village.grid)
+	if best_target is BattleBuildingTarget:
+		_claim_slot(actor, chosen_path)
 	actor.repath_cooldown = REPATH_INTERVAL
 	last_ai_decision["path_cost"] = maxi(0, chosen_path.size() - 1)
 	last_ai_decision["target_name"] = _describe_target(best_target)
@@ -443,7 +450,8 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 	if actor.is_flying:
 		return _fly_path(actor, target)
 	var start := village.grid.world_to_cell(actor.global_position)
-	var radius := ceili(actor.attack_range / VillageGrid.TILE_SIZE.y) + 2
+	var reach := actor.attack_range + target.reach_bonus
+	var radius := ceili(reach / VillageGrid.TILE_SIZE.y) + 2
 	var origin: Vector2i = structure["cell"]
 	var footprint: Vector2i = structure["footprint"]
 	var goals: Array[Vector2i] = []
@@ -452,11 +460,95 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 			var cell := Vector2i(x, y)
 			if village.grid.occupied.has(cell):
 				continue
-			if village.grid.cell_to_world(Vector2(cell)).distance_to(target.global_position) <= actor.attack_range:
+			if village.grid.cell_to_world(Vector2(cell)).distance_to(target.global_position) <= reach:
 				goals.append(cell)
 	if not _can_reach(start, goals):
 		return no_path
-	return GridPathfinder.find_path_to_any(village.grid, start, goals, path_algorithm, trace)
+	return GridPathfinder.find_path_to_any(village.grid, start, _unclaimed_goals(goals, actor, target), path_algorithm, trace)
+
+
+## Drops the attack spots another living troop already took for the same target. If every spot is taken the
+## full list is returned, so a crowd is never left with nowhere to go.
+func _unclaimed_goals(goals: Array[Vector2i], actor: TroopActor, target: Node2D) -> Array[Vector2i]:
+	var free: Array[Vector2i] = []
+	for cell in goals:
+		var owner: Variant = _slot_claims.get(cell)
+		if owner == null or owner == actor or not is_instance_valid(owner):
+			free.append(cell)
+		elif owner.state == TroopActor.State.DEAD or owner.target != target:
+			free.append(cell)
+	return free if not free.is_empty() else goals
+
+
+func _claim_slot(actor: TroopActor, path: Array[Vector2i]) -> void:
+	for cell in _slot_claims.keys():
+		var owner: Variant = _slot_claims[cell]
+		if owner == actor or not is_instance_valid(owner) or owner.state == TroopActor.State.DEAD:
+			_slot_claims.erase(cell)
+	if not path.is_empty() and not actor.is_flying:
+		_slot_claims[path.back()] = actor
+
+
+## Keeps troops from standing on top of each other: overlapping troops of the same side are pushed apart a
+## little every frame. Walkers give way more than troops that are busy fighting, and nobody is pushed into a
+## building or out of reach of the thing they are attacking.
+func _separate_troops(delta: float) -> void:
+	var grounded: Array[TroopActor] = []
+	var flyers: Array[TroopActor] = []
+	for unit in attacker_units:
+		if is_instance_valid(unit) and unit.state != TroopActor.State.DEAD:
+			if unit.is_flying:
+				flyers.append(unit)
+			else:
+				grounded.append(unit)
+	_separate_group(grounded, SEPARATION_RADIUS, delta)
+	_separate_group(flyers, AIR_SEPARATION_RADIUS, delta)
+	_separate_group(_living_defenders(), SEPARATION_RADIUS, delta)
+
+
+func _separate_group(units: Array[TroopActor], radius: float, delta: float) -> void:
+	var strength := clampf(delta * 6.0, 0.0, 0.5)
+	for i in range(units.size()):
+		for j in range(i + 1, units.size()):
+			var first := units[i]
+			var second := units[j]
+			var offset := second.global_position - first.global_position
+			var distance := offset.length()
+			if distance >= radius:
+				continue
+			var direction := Vector2.from_angle(float((i * 7 + j * 13) % 360) * 0.0174533)
+			if distance > 0.5:
+				direction = offset / distance
+			var push := direction * (radius - distance) * strength
+			var first_weight := _push_weight(first)
+			var second_weight := _push_weight(second)
+			var total := first_weight + second_weight
+			_nudge(first, -push * (first_weight / total))
+			_nudge(second, push * (second_weight / total))
+
+
+func _push_weight(unit: TroopActor) -> float:
+	match unit.state:
+		TroopActor.State.ATTACK, TroopActor.State.RECOVER:
+			return 0.35
+		_:
+			return 1.0
+
+
+func _nudge(unit: TroopActor, offset: Vector2) -> void:
+	var destination := unit.global_position + offset
+	var cell := village.grid.world_to_cell(destination)
+	if not unit.is_flying and (not village.grid.contains_cell(cell) or village.grid.occupied.has(cell)):
+		return
+	if unit.state == TroopActor.State.ATTACK or unit.state == TroopActor.State.RECOVER:
+		if is_instance_valid(unit.target):
+			var reach := unit.attack_range
+			if unit.target is BattleBuildingTarget:
+				reach += (unit.target as BattleBuildingTarget).reach_bonus
+			if destination.distance_to(unit.target.global_position) > reach - 1.0:
+				return  # Never shove a fighting troop out of range of its target.
+	unit.global_position = destination
+
 
 
 ## Flyers go in a straight line over walls and buildings, stopping once the target is in range.

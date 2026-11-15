@@ -8,6 +8,7 @@ import argparse, shutil, subprocess, sys
 BASE = Path(__file__).resolve().parents[1]
 TESTS = [
     'tests/pathfinding/test_grid_pathfinder.gd',
+    'tests/pathfinding/test_path_smoother.gd',
     'tests/pathfinding/test_path_visual_trace.gd',
     'tests/pathfinding/test_pathfinder_equivalence.gd',
     'tests/ai/test_battle_search_ai.gd',
@@ -15,6 +16,7 @@ TESTS = [
     'tests/battle/test_battle_rules.gd',
     'tests/battle/test_clan_castle.gd',
     'tests/battle/test_trial_commander.gd',
+    'tests/battle/test_troop_spreading.gd',
     'tests/battle/test_wall_breach.gd',
     'tests/battle/test_attack_visuals.gd',
     'tests/battle/test_battle_frames.gd',

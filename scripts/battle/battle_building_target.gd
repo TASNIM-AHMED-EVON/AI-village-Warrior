@@ -38,6 +38,9 @@ var _bar_linger := 0.0
 var _bar_width := 56.0
 var _art_top_y := -60.0
 var _art_center_y := -30.0
+## Troops measure their reach from the building's centre; big buildings get extra reach so troops can
+## attack from the walls instead of piling onto the few cells right next to the middle.
+var reach_bonus := 0.0
 var _last_screen_scale := 1.0
 
 
@@ -56,6 +59,7 @@ func configure(structure: Dictionary, grid: VillageGrid) -> void:
 	var footprint: Vector2i = structure["footprint"]
 	var center_cell: Vector2 = Vector2(structure["cell"]) + (Vector2(footprint) - Vector2.ONE) * 0.5
 	global_position = grid.cell_to_world(center_cell)
+	reach_bonus = 4.0 * float(footprint.x + footprint.y)
 	# The building art stands on the bottom corner of its footprint diamond (see VillageObjectLayer).
 	var art: Vector2 = ART_DIMENSIONS.get(building_type, Vector2(90, 90))
 	var half_height := float(footprint.x + footprint.y) * VillageGrid.TILE_SIZE.y * 0.25

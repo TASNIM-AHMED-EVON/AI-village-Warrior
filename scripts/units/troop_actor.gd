@@ -53,6 +53,12 @@ var _sprite_base_y := 0.0
 var _altitude_now := 0.0
 var _bar_y := -83.0
 var _animated_sprite: AnimatedSprite2D
+## Walking: troops speed up and slow down instead of snapping to full speed, and each one walks a touch
+## faster or slower than its neighbours so a group does not move in lock-step.
+var _velocity := Vector2.ZERO
+var _speed_jitter := 1.0
+const ACCELERATION := 9.0
+const WAYPOINT_CUT := 7.0
 static var _shared_frames: Dictionary = {}
 
 const SPRITES := {
@@ -82,6 +88,7 @@ func configure(unit_type: String, level: int = 1) -> bool:
 	is_flying = bool(definition.get("flying", false))
 	fly_altitude = 34.0 if is_flying else 0.0
 	_altitude_now = fly_altitude
+	_speed_jitter = randf_range(0.94, 1.06)
 	_build_visual()
 	queue_redraw()
 	return true
@@ -122,6 +129,9 @@ func set_walk_path(path_cells: Array[Vector2i], grid: VillageGrid) -> void:
 	# A re-plan issued mid-step must not make the troop walk back to the centre of the cell it is leaving.
 	if movement_path.size() >= 2 and global_position.distance_to(movement_path[1]) < movement_path[0].distance_to(movement_path[1]):
 		movement_path.remove_at(0)
+	if not is_flying:
+		# Walk the route like a person: straight where the way is clear, rounded corners where it is not.
+		movement_path = PathSmoother.smooth(global_position, movement_path, grid)
 
 
 ## Walk to a point without a target (defenders returning to their castle).
@@ -198,14 +208,7 @@ func step(delta: float) -> void:
 		_evaluate_target_distance()
 		if state == State.MOVE and is_instance_valid(target):
 			if waypoint_index < movement_path.size():
-				var waypoint := movement_path[waypoint_index]
-				var move_vector := waypoint - global_position
-				if move_vector.length() > 1.5:
-					facing_direction = move_vector.normalized()
-					global_position = global_position.move_toward(waypoint, move_speed * delta)
-					_walk_phase = fposmod(_walk_phase + delta * 12.0, TAU)
-				else:
-					waypoint_index += 1
+				_follow_path(delta)
 			else:
 				# Do not fall back to direct movement through walls if a route is exhausted.
 				target = null
@@ -229,14 +232,30 @@ func _step_return(delta: float) -> void:
 	if waypoint_index >= movement_path.size():
 		_change_state(State.IDLE)
 		return
+	_follow_path(delta)
+
+
+## Moves along the planned path with smooth acceleration, cutting inside waypoints instead of stopping on each.
+func _follow_path(delta: float) -> void:
 	var waypoint := movement_path[waypoint_index]
-	var move_vector := waypoint - global_position
-	if move_vector.length() > 1.5:
-		facing_direction = move_vector.normalized()
-		global_position = global_position.move_toward(waypoint, move_speed * delta)
-		_walk_phase = fposmod(_walk_phase + delta * 12.0, TAU)
-	else:
+	var to_waypoint := waypoint - global_position
+	var distance := to_waypoint.length()
+	var is_last := waypoint_index >= movement_path.size() - 1
+	if distance <= (1.5 if is_last else WAYPOINT_CUT):
 		waypoint_index += 1
+		return
+	var direction := to_waypoint / distance
+	var speed := move_speed * _speed_jitter
+	_velocity = _velocity.move_toward(direction * speed, speed * ACCELERATION * delta)
+	var step_length := _velocity.length() * delta
+	if is_last and step_length >= distance:
+		global_position = waypoint
+	else:
+		global_position += _velocity * delta
+	var turned := facing_direction.lerp(direction, clampf(delta * 14.0, 0.0, 1.0))
+	if turned.length_squared() > 0.0001:
+		facing_direction = turned.normalized()
+	_walk_phase = fposmod(_walk_phase + delta * 12.0 * clampf(_velocity.length() / maxf(speed, 1.0), 0.35, 1.0), TAU)
 
 
 func _process(delta: float) -> void:
@@ -251,7 +270,14 @@ func _evaluate_target_distance() -> void:
 	if target_delta.length_squared() > 0.01:
 		facing_direction = target_delta.normalized()
 	var distance := target_delta.length()
-	if distance <= attack_range:
+	var reach := attack_range
+	if target is BattleBuildingTarget:
+		reach += (target as BattleBuildingTarget).reach_bonus
+	if distance <= reach:
+		# A ground troop heading for a building walks on to its own spot around it before it starts hitting,
+		# so a group fans out along the walls instead of freezing in a pile where it first got in range.
+		if not is_flying and target is BattleBuildingTarget and state == State.MOVE and waypoint_index < movement_path.size():
+			return
 		_change_state(State.ATTACK if _attack_cooldown <= 0.0 else State.RECOVER)
 	else:
 		_change_state(State.MOVE)
@@ -260,6 +286,8 @@ func _evaluate_target_distance() -> void:
 func _change_state(next_state: State) -> void:
 	if state == next_state:
 		return
+	if next_state != State.MOVE and next_state != State.RETURN:
+		_velocity = Vector2.ZERO
 	var previous := state
 	state = next_state
 	_sync_visual()

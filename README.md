@@ -161,3 +161,11 @@ Open this folder in Godot (it contains `project.godot`). A previous run copy was
 - **Measured:** 9 of 9 runs reached 3 stars at a fixed 60 FPS (6 at 2x, 3 at 5x; about 130 s left at 2x). A side-by-side sweep of all 8 sides showed N/NW/W/NE finish fastest and E/SE slowest (about 40 s apart); the commander picks N. A naive "everyone on the west side" drop also wins this fortress, so do **not** claim the AI beats a naive attacker here — only that it reliably 3-stars and explains its choices. Unverified: behaviour on a real GPU / at uncapped frame rates, and in the interactive editor.
 - Also this round: Laboratory + troop levels, Dragon (flying, continuous fire), bulk training panel, building foundations/animations/level badges, RESET LEVELS, battle-on-a-copy so a saved layout survives attacks, building MOVE button. See the chat summaries; all covered by `tests/`.
 - New test: `tests/battle/test_trial_commander.gd` (registered in `tools/run_all_tests.py`).
+
+## Progress log — troop movement and spreading (engine-tested headless on Godot 4.4.1)
+
+- **Walking:** `scripts/pathfinding/path_smoother.gd` turns the 4-direction grid route (a staircase) into straight shortcuts where the way is clear plus rounded corners where it is not; it never clips a wall and never moves the destination. Troops also accelerate/brake and each walks 94-106% of base speed (`troop_actor.gd`). Measured: heading change per 100 px walked fell from 215 to 90 degrees.
+- **Spreading:** each ground troop claims its own attack spot around a building (`_slot_claims` in `battle_manager.gd`), walks to it before attacking, and big buildings give troops extra reach (`BattleBuildingTarget.reach_bonus`) so there are enough spots along the walls. A gentle separation pass keeps same-side troops from overlapping. Measured on the AI Trial: share of ground-troop pairs closer than 10 px went from 35% to 0.1% (worst moment 27 overlapping pairs to 1).
+- Side effect to know about: melee reach against buildings grew by 8-24 px (footprint based), so combat is marginally easier. The AI Trial still reached 3 stars in 6 of 6 runs (2x and 5x, fixed 60 FPS).
+- New tests: `tests/pathfinding/test_path_smoother.gd`, `tests/battle/test_troop_spreading.gd` (the latter fails with 80% overlap if claims/separation are switched off). Not verified on a real GPU or by hand in the editor.
+
