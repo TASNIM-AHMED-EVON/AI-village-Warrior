@@ -109,9 +109,13 @@ static func _best_frontier_index(frontier: Array[Vector2i], costs: Dictionary, g
 static func _nearest_goal_distance(cell: Vector2i, goals: Dictionary) -> float:
 	var nearest := INF
 	for goal in goals.keys():
-		var across := float(((cell.x - goal.x) - (cell.y - goal.y)) * 24)
-		var down := float(((cell.x - goal.x) + (cell.y - goal.y)) * 12)
-		nearest = minf(nearest, sqrt(across * across + down * down))
+		var dx: int = cell.x - goal.x
+		var dy: int = cell.y - goal.y
+		var along := absi(dx)
+		var across := absi(dy)
+		var diagonals := mini(along, across)
+		var diagonal_cost := 24 if (dx >= 0) == (dy >= 0) else 48
+		nearest = minf(nearest, float(diagonal_cost * diagonals + 27 * (maxi(along, across) - diagonals)))
 	return nearest
 
 

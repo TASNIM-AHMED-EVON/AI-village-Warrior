@@ -21,7 +21,8 @@ const ARMY_LIMIT := 29  # Minimum deploy cap; grows if the player trained a bigg
 const TROOP_STOCK := {"warrior": 8, "mage": 3, "goblin": 8, "archer": 8, "tank": 2}
 ## Planning is the expensive part of a battle (a pathfinding search per candidate target), so planned
 ## re-evaluations are queued and served a few per frame instead of all in one frame.
-const REPLANS_PER_FRAME := 1
+## How long (microseconds) one frame may spend planning attacker routes.
+const REPLAN_BUDGET_USEC := 6000
 const DEFENDER_DECISIONS_PER_FRAME := 2
 const DEFENDER_THINK_INTERVAL := 0.6
 const REPATH_INTERVAL := 0.45
@@ -75,6 +76,7 @@ var last_defender_decision: Dictionary = {}
 var defenders_released := 0
 var defenders_defeated := 0
 var _replan_queue: Array[TroopActor] = []
+var _plan_job: Dictionary = {}
 var _defender_decision_queue: Array[TroopActor] = []
 var _awareness_timer := 0.0
 ## Connected regions of walkable cells. Lets planning skip targets that are walled off without running a
@@ -178,7 +180,7 @@ func deploy(troop_id: String, cell: Vector2i) -> bool:
 	village.army[troop_id] = int(troop_stock[troop_id])
 	deployed_counts[troop_id] = int(deployed_counts.get(troop_id, 0)) + 1
 	total_deployed += 1
-	_assign_minimax_attack_plan(actor)
+	_queue_replan(actor, true)  # Planned within a frame or two, without stalling the click.
 	if phase == Phase.DEPLOYMENT:
 		phase = Phase.ACTIVE
 	status_message.emit("%s deployed." % troop_id.capitalize())
@@ -303,25 +305,75 @@ func _is_valid_deployment_cell(cell: Vector2i) -> bool:
 	return true
 
 
+## Plans a whole attack decision in one go (used where the work cannot wait, for example by tests).
 func _assign_minimax_attack_plan(actor: TroopActor) -> void:
-	if not is_instance_valid(actor) or actor.team != TroopActor.Team.ATTACKER or actor.state == TroopActor.State.DEAD:
+	var context := _plan_begin(actor)
+	if context.is_empty():
 		return
+	_plan_finish(context, GridPathfinder.find_paths_to_many(village.grid, context["start"], context["goal_sets"]))
+
+
+## First half of planning: look at the buildings and work out where the troop could stand to hit each one.
+## Returns the context for `_plan_finish` (empty if the troop can no longer plan).
+func _plan_begin(actor: TroopActor) -> Dictionary:
+	if not is_instance_valid(actor) or actor.team != TroopActor.Team.ATTACKER or actor.state == TroopActor.State.DEAD:
+		return {}
 	actor.think_cooldown = ATTACKER_RECONSIDER_INTERVAL
 	var candidates: Array[BattleBuildingTarget] = []
 	var candidate_paths: Dictionary = {}
 	var path_costs: Dictionary = {}
 	var stand_positions: Dictionary = {}
+	# One sweep finds the cheapest route to every building at once (instead of one search per building).
+	var goal_sets: Dictionary = {}
+	var goal_targets: Dictionary = {}
 	for candidate in building_targets.values():
 		# Walls are obstacles, not objectives: they are only attacked to breach a sealed base (below).
 		if not is_instance_valid(candidate) or candidate.building_type == "wall":
 			continue
-		var path := _find_attack_path(actor, candidate)
+		if actor.is_flying:
+			var flight := _fly_path(actor, candidate)
+			if not flight.is_empty():
+				candidates.append(candidate)
+				candidate_paths[candidate.building_id] = flight
+				path_costs[candidate.building_id] = GridPathfinder.path_length(flight)
+				stand_positions[candidate.building_id] = village.grid.cell_to_world(Vector2(flight[flight.size() - 1]))
+			continue
+		var goals := _attack_goals(actor, candidate)
+		if not goals.is_empty():
+			goal_sets[candidate.building_id] = goals
+			goal_targets[candidate.building_id] = candidate
+	return {
+		"actor": actor, "start": village.grid.world_to_cell(actor.global_position),
+		"candidates": candidates, "candidate_paths": candidate_paths, "path_costs": path_costs,
+		"stand_positions": stand_positions, "goal_sets": goal_sets, "goal_targets": goal_targets,
+	}
+
+
+## Second half: compare the candidates with the tactical search and send the troop on its way.
+func _plan_finish(context: Dictionary, swept: Dictionary) -> void:
+	var actor: TroopActor = context["actor"]
+	if not is_instance_valid(actor) or actor.state == TroopActor.State.DEAD:
+		return
+	var candidates: Array[BattleBuildingTarget] = context["candidates"]
+	var candidate_paths: Dictionary = context["candidate_paths"]
+	var path_costs: Dictionary = context["path_costs"]
+	var stand_positions: Dictionary = context["stand_positions"]
+	var goal_sets: Dictionary = context["goal_sets"]
+	var goal_targets: Dictionary = context["goal_targets"]
+	# A building may have fallen while the sweep was running: forget candidates that are gone.
+	for index in range(candidates.size() - 1, -1, -1):
+		if not is_instance_valid(candidates[index]) or candidates[index].hp <= 0:
+			candidates.remove_at(index)
+	for building_id in goal_sets:
+		if not swept.has(building_id) or not is_instance_valid(goal_targets[building_id]) or goal_targets[building_id].hp <= 0:
+			continue
+		var path: Array[Vector2i] = swept[building_id]
 		if path.is_empty():
 			continue
-		candidates.append(candidate)
-		candidate_paths[candidate.building_id] = path
-		path_costs[candidate.building_id] = GridPathfinder.path_length(path)
-		stand_positions[candidate.building_id] = village.grid.cell_to_world(Vector2(path[path.size() - 1]))
+		candidates.append(goal_targets[building_id])
+		candidate_paths[building_id] = path
+		path_costs[building_id] = GridPathfinder.path_length(path)
+		stand_positions[building_id] = village.grid.cell_to_world(Vector2(path[path.size() - 1]))
 	# Defending troops released from a Clan Castle are targets too.
 	var troop_candidates: Array[TroopActor] = []
 	var troop_lookup: Dictionary = {}
@@ -366,6 +418,11 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 	var chosen_path: Array[Vector2i] = []
 	if candidate_paths.has(target_id):
 		chosen_path = candidate_paths[target_id]
+	# The comparison above used the shared sweep; the route actually walked uses the algorithm the player picked.
+	if best_target is BattleBuildingTarget and not actor.is_flying and path_algorithm != GridPathfinder.ASTAR:
+		var preferred := _find_attack_path(actor, best_target)
+		if not preferred.is_empty():
+			chosen_path = preferred
 	actor.set_walk_path(chosen_path, village.grid)
 	if best_target is BattleBuildingTarget:
 		_claim_slot(actor, chosen_path)
@@ -456,12 +513,25 @@ func _nearest_defenders(actor: TroopActor, limit: int) -> Array[TroopActor]:
 
 
 func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: Dictionary = {}) -> Array[Vector2i]:
-	var structure := _get_structure(target.building_id)
 	var no_path: Array[Vector2i] = []
-	if structure.is_empty():
+	if _get_structure(target.building_id).is_empty():
 		return no_path
 	if actor.is_flying:
 		return _fly_path(actor, target)
+	var goals := _attack_goals(actor, target)
+	if goals.is_empty():
+		return no_path
+	var start := village.grid.world_to_cell(actor.global_position)
+	return GridPathfinder.find_path_to_any(village.grid, start, goals, path_algorithm, trace)
+
+
+## Every free cell a ground troop could stand on to hit `target`, minus the spots other troops already took.
+## Empty when the target cannot be reached at all (the flood-fill region check is cheap and avoids a full search).
+func _attack_goals(actor: TroopActor, target: BattleBuildingTarget) -> Array[Vector2i]:
+	var no_goals: Array[Vector2i] = []
+	var structure := _get_structure(target.building_id)
+	if structure.is_empty():
+		return no_goals
 	var start := village.grid.world_to_cell(actor.global_position)
 	var reach := actor.attack_range + target.reach_bonus
 	var radius := ceili(reach / VillageGrid.TILE_SIZE.y) + 2
@@ -476,8 +546,8 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 			if village.grid.cell_to_world(Vector2(cell)).distance_to(target.global_position) <= reach:
 				goals.append(cell)
 	if not _can_reach(start, goals):
-		return no_path
-	return GridPathfinder.find_path_to_any(village.grid, start, _unclaimed_goals(goals, actor, target), path_algorithm, trace)
+		return no_goals
+	return _unclaimed_goals(goals, actor, target)
 
 
 ## Drops the attack spots another living troop already took for the same target. If every spot is taken the
@@ -485,18 +555,18 @@ func _find_attack_path(actor: TroopActor, target: BattleBuildingTarget, trace: D
 func _unclaimed_goals(goals: Array[Vector2i], actor: TroopActor, target: Node2D) -> Array[Vector2i]:
 	var free: Array[Vector2i] = []
 	for cell in goals:
-		var owner: Variant = _slot_claims.get(cell)
-		if owner == null or owner == actor or not is_instance_valid(owner):
+		var claimant: Variant = _slot_claims.get(cell)
+		if claimant == null or claimant == actor or not is_instance_valid(claimant):
 			free.append(cell)
-		elif owner.state == TroopActor.State.DEAD or owner.target != target:
+		elif claimant.state == TroopActor.State.DEAD or claimant.target != target:
 			free.append(cell)
 	return free if not free.is_empty() else goals
 
 
 func _claim_slot(actor: TroopActor, path: Array[Vector2i]) -> void:
 	for cell in _slot_claims.keys():
-		var owner: Variant = _slot_claims[cell]
-		if owner == actor or not is_instance_valid(owner) or owner.state == TroopActor.State.DEAD:
+		var claimant: Variant = _slot_claims[cell]
+		if claimant == actor or not is_instance_valid(claimant) or claimant.state == TroopActor.State.DEAD:
 			_slot_claims.erase(cell)
 	if not path.is_empty() and not actor.is_flying:
 		_slot_claims[path.back()] = actor
@@ -1024,17 +1094,59 @@ func _queue_replan_all() -> void:
 		_queue_replan(attacker_units[index])
 
 
+## Planning is spread over frames: each frame it works for about REPLAN_BUDGET_USEC on the troop at the head of the
+## queue (the route sweep can pause and resume), and the tactical decision is made in a frame of its own. A troop's
+## plan therefore takes a few frames instead of one long stall, which is what made big attacks stutter.
 func _process_replan_queue() -> void:
-	var processed := 0
-	while processed < REPLANS_PER_FRAME and not _replan_queue.is_empty():
+	var started := Time.get_ticks_usec()
+	# At fast game speeds a frame is several times as much battle time, so planning gets a bigger slice too
+	# (otherwise troops would wait too long, in battle time, for their orders).
+	var budget := int(float(REPLAN_BUDGET_USEC) * clampf(speed_multiplier, 1.0, 3.0))
+	if _plan_job.is_empty():
+		var actor := _next_replan_actor()
+		if actor == null:
+			return
+		var context := _plan_begin(actor)
+		if context.is_empty():
+			return
+		_plan_job = {"context": context, "sweep": GridPathfinder.ManySweep.new(village.grid, context["start"], context["goal_sets"]), "ready": false}
+	var job: Dictionary = _plan_job
+	var planned: Variant = job["context"]["actor"]
+	if not is_instance_valid(planned) or (planned as TroopActor).state == TroopActor.State.DEAD:
+		_plan_job = {}
+		return
+	if not bool(job["ready"]):
+		var sweep: GridPathfinder.ManySweep = job["sweep"]
+		var remaining := maxi(budget - (Time.get_ticks_usec() - started), 1500)
+		if not sweep.step(remaining):
+			return  # Not finished: carry on next frame.
+		job["ready"] = true
+		if Time.get_ticks_usec() - started > budget / 2:
+			return  # The sweep used up this frame; the decision is made next frame.
+	var sweep_done: GridPathfinder.ManySweep = job["sweep"]
+	_plan_job = {}
+	_plan_finish(job["context"], sweep_done.results)
+
+
+## Runs all queued planning to completion right now. Normal play never needs this (planning is spread over frames);
+## tests use it to look at the result of a plan.
+func settle_planning(max_rounds: int = 2000) -> void:
+	var rounds := 0
+	while (not _replan_queue.is_empty() or not _plan_job.is_empty()) and rounds < max_rounds:
+		_process_replan_queue()
+		rounds += 1
+
+
+func _next_replan_actor() -> TroopActor:
+	while not _replan_queue.is_empty():
 		var popped: Variant = _replan_queue.pop_front()
 		if not is_instance_valid(popped):
 			continue
 		var actor := popped as TroopActor
 		if actor.state == TroopActor.State.DEAD or actor.team != TroopActor.Team.ATTACKER:
 			continue
-		_assign_minimax_attack_plan(actor)
-		processed += 1
+		return actor
+	return null
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1286,6 +1398,7 @@ func _finish(final_phase: Phase) -> void:
 		return
 	phase = final_phase
 	_replan_queue.clear()
+	_plan_job = {}
 	for actor in _all_troops():
 		actor.set_process(false)
 	var loot_gold := roundi(350.0 * float(get_destruction_percent()) / 100.0)

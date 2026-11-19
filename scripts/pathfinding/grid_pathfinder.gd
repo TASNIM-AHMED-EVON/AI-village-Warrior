@@ -21,10 +21,10 @@ const BEST_FIRST := "Weighted Best-First Search"
 const ALGORITHMS := [ASTAR, BFS, GREEDY_BFS, BEST_FIRST]
 ## The first four directions are straight, the last four diagonal. The order is part of the contract: ties between
 ## equally good cells are broken by who was inserted first, and tests compare against a reference implementation.
-const _DX := [1, 0, -1, 0, 1, -1, -1, 1]
-const _DY := [0, 1, 0, -1, 1, 1, -1, -1]
+static var _DX := PackedInt32Array([1, 0, -1, 0, 1, -1, -1, 1])
+static var _DY := PackedInt32Array([0, 1, 0, -1, 1, 1, -1, -1])
 ## Screen distance of each direction above, in pixels (tile 48 x 24: an axis step is (24, 12), a "down" diagonal (0, 24)).
-const _STEP_COST := [27, 27, 27, 27, 24, 48, 24, 48]
+static var _STEP_COST := PackedInt32Array([27, 27, 27, 27, 24, 48, 24, 48])
 const _AXIS_STEP_PIXELS := 26.83
 
 
@@ -103,6 +103,137 @@ static func find_path_to_any(grid: VillageGrid, start: Vector2i, goals: Array[Ve
 	return path
 
 
+## One sweep from `start` that finds the cheapest route to EVERY goal set at once. `goal_sets` maps an id to the
+## cells that count as arriving (for example every free cell within reach of one building); the result maps each
+## reachable id to its route (start ... goal). The AI needs a route to each building to compare them, and one shared
+## sweep costs about the same as a single search, where one search per building multiplied the cost by the number of
+## buildings. Costs and the no-corner-cutting rule are the same as `find_path_to_any`.
+static func find_paths_to_many(grid: VillageGrid, start: Vector2i, goal_sets: Dictionary) -> Dictionary:
+	var sweep := ManySweep.new(grid, start, goal_sets)
+	sweep.step(-1)  # No time limit: run to the end.
+	return sweep.results
+
+
+## The same sweep as `find_paths_to_many`, but it can be paused and resumed: `step(budget_usec)` works for at most
+## that many microseconds and returns true once every reachable goal set has its route (see `results`). The battle
+## uses it to spread one troop's planning over a few frames instead of stalling a single frame.
+class ManySweep:
+	var results := {}
+	var done := false
+	var _grid: VillageGrid
+	var _start: Vector2i
+	var _width := 0
+	var _height := 0
+	var _start_index := 0
+	var _owners := {}
+	var _pending := 0
+	var _blocked := PackedByteArray()
+	var _cost := PackedInt32Array()
+	var _parent := PackedInt32Array()
+	var _open_sequence := PackedInt32Array()
+	var _heap := GridPathfinder._MinHeap.new()
+	var _open_count := 0
+	var _next_sequence := 1
+
+	func _init(grid: VillageGrid, start: Vector2i, goal_sets: Dictionary) -> void:
+		_grid = grid
+		_start = start
+		_width = grid.width
+		_height = grid.height
+		if not grid.contains_cell(start) or goal_sets.is_empty():
+			done = true
+			return
+		var cell_count := _width * _height
+		for id in goal_sets:
+			var usable := false
+			for goal in goal_sets[id]:
+				if grid.contains_cell(goal) and (not grid.occupied.has(goal) or goal == start):
+					var goal_index: int = goal.y * _width + goal.x
+					if not _owners.has(goal_index):
+						_owners[goal_index] = []
+					if not _owners[goal_index].has(id):
+						_owners[goal_index].append(id)
+					usable = true
+			if usable:
+				_pending += 1
+		if _pending == 0:
+			done = true
+			return
+		_blocked.resize(cell_count)
+		for occupied_cell in grid.occupied.keys():
+			if occupied_cell.x >= 0 and occupied_cell.y >= 0 and occupied_cell.x < _width and occupied_cell.y < _height:
+				_blocked[occupied_cell.y * _width + occupied_cell.x] = 1
+		_cost.resize(cell_count)
+		_cost.fill(-1)
+		_parent.resize(cell_count)
+		_parent.fill(-1)
+		_open_sequence.resize(cell_count)
+		_open_sequence.fill(-1)
+		_start_index = start.y * _width + start.x
+		_cost[_start_index] = 0
+		_open_sequence[_start_index] = 0
+		_heap.push(0.0, 0, _start_index)
+		_open_count = 1
+
+	func step(budget_usec: int) -> bool:
+		if done:
+			return true
+		var deadline := Time.get_ticks_usec() + budget_usec
+		var pops := 0
+		while _open_count > 0 and not _heap.is_empty():
+			pops += 1
+			if budget_usec >= 0 and pops % 48 == 0 and Time.get_ticks_usec() >= deadline:
+				return false
+			var current := _heap.pop()
+			if _open_sequence[current] != _heap.popped_sequence or _heap.popped_score != float(_cost[current]):
+				continue  # A stale heap entry.
+			_open_sequence[current] = -1
+			_open_count -= 1
+			if _owners.has(current):
+				# The first time a goal cell is settled it is the cheapest one for every id that owns it.
+				for id in _owners[current]:
+					if results.has(id):
+						continue
+					var route: Array[Vector2i] = []
+					var cursor := current
+					while cursor != _start_index:
+						route.push_front(GridPathfinder._to_cell(cursor, _width))
+						cursor = _parent[cursor]
+					route.push_front(_start)
+					results[id] = route
+					_pending -= 1
+				if _pending <= 0:
+					break
+			var cx := current % _width
+			@warning_ignore("integer_division")
+			var cy := current / _width
+			for direction in range(8):
+				var nx: int = cx + GridPathfinder._DX[direction]
+				var ny: int = cy + GridPathfinder._DY[direction]
+				if nx < 0 or ny < 0 or nx >= _width or ny >= _height:
+					continue
+				var neighbor := ny * _width + nx
+				if _blocked[neighbor] == 1:
+					continue
+				if direction >= 4 and (_blocked[cy * _width + nx] == 1 or _blocked[ny * _width + cx] == 1):
+					continue
+				var next_cost := _cost[current] + GridPathfinder._STEP_COST[direction]
+				var known_cost := _cost[neighbor]
+				if known_cost != -1 and next_cost >= known_cost:
+					continue
+				_cost[neighbor] = next_cost
+				_parent[neighbor] = current
+				if _open_sequence[neighbor] != -1:
+					_heap.push(float(next_cost), _open_sequence[neighbor], neighbor)
+				else:
+					_open_sequence[neighbor] = _next_sequence
+					_heap.push(float(next_cost), _next_sequence, neighbor)
+					_next_sequence += 1
+					_open_count += 1
+		done = true
+		return true
+
+
 static func _search_bfs(width: int, height: int, start_index: int, is_goal: PackedByteArray, blocked: PackedByteArray, cost: PackedInt32Array, parent: PackedInt32Array, explored: Array[Vector2i], record_trace: bool) -> int:
 	# Breadth-first search is a plain FIFO queue (the heap's insertion-sequence order).
 	var queue := PackedInt32Array([start_index])
@@ -173,7 +304,7 @@ static func _search_scored(algorithm: String, width: int, height: int, start_ind
 				continue
 			if direction >= 4 and (blocked[cy * width + nx] == 1 or blocked[ny * width + cx] == 1):
 				continue  # No cutting a corner between two blocked cells.
-			var next_cost := cost[current] + int(_STEP_COST[direction])
+			var next_cost := cost[current] + _STEP_COST[direction]
 			var known_cost := cost[neighbor]
 			if known_cost != -1 and next_cost >= known_cost:
 				continue
@@ -207,10 +338,15 @@ static func _frontier_score(algorithm: String, path_cost: int, heuristic: float)
 static func _nearest_distance(x: int, y: int, goal_xs: PackedInt32Array, goal_ys: PackedInt32Array) -> float:
 	var nearest_distance := 1.0e30
 	for index in range(goal_xs.size()):
-		# Straight-line screen distance to the goal cell: never longer than any real route, so A* stays exact.
-		var across := float(((x - goal_xs[index]) - (y - goal_ys[index])) * 24)
-		var down := float(((x - goal_xs[index]) + (y - goal_ys[index])) * 12)
-		var distance := sqrt(across * across + down * down)
+		# The exact cheapest cost across open ground (no obstacles), so A* barely explores anything off the route
+		# and is never over-optimistic: diagonals first, then straight steps for what is left.
+		var dx: int = x - goal_xs[index]
+		var dy: int = y - goal_ys[index]
+		var along := absi(dx)
+		var across := absi(dy)
+		var diagonals := mini(along, across)
+		var diagonal_cost := 24 if (dx >= 0) == (dy >= 0) else 48
+		var distance := float(diagonal_cost * diagonals + 27 * (maxi(along, across) - diagonals))
 		if distance < nearest_distance:
 			nearest_distance = distance
 	return nearest_distance

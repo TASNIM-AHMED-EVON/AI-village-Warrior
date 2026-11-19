@@ -32,7 +32,8 @@ func _run() -> void:
 func _test_troops_share_one_breach_wall() -> void:
 	var battle := _make_battle([25])
 	for y in [10, 30, 50]:
-		battle.deploy("warrior", Vector2i(19, y))
+		battle_deploy_and_plan(battle, "warrior", Vector2i(19, y))
+	battle.settle_planning()
 	var wall_ids: Array[String] = []
 	var all_walls := true
 	for attacker in battle.attacker_units:
@@ -51,7 +52,7 @@ func _test_troops_share_one_breach_wall() -> void:
 func _test_everyone_goes_through_the_gap() -> void:
 	var battle := _make_battle([25])
 	for y in [10, 30, 50]:
-		battle.deploy("warrior", Vector2i(19, y))
+		battle_deploy_and_plan(battle, "warrior", Vector2i(19, y))
 	var breach_id := battle._breach_wall_id
 	battle._on_building_destroyed(breach_id)
 	_run_ticks(battle, 1.5)
@@ -68,8 +69,8 @@ func _test_everyone_goes_through_the_gap() -> void:
 
 func _test_troop_bashing_another_wall_switches() -> void:
 	var battle := _make_battle([25])
-	battle.deploy("warrior", Vector2i(19, 30))
-	battle.deploy("warrior", Vector2i(19, 12))
+	battle_deploy_and_plan(battle, "warrior", Vector2i(19, 30))
+	battle_deploy_and_plan(battle, "warrior", Vector2i(19, 12))
 	var bystander: TroopActor = battle.attacker_units[1]
 	var other_wall: BattleBuildingTarget = battle.building_targets["wall_25_5"]
 	bystander.assign_target(other_wall)  # Busy hitting a wall far from the gap.
@@ -86,7 +87,7 @@ func _test_troop_bashing_another_wall_switches() -> void:
 func _test_second_wall_layer() -> void:
 	var battle := _make_battle([25, 29])
 	for y in [20, 38]:
-		battle.deploy("warrior", Vector2i(19, y))
+		battle_deploy_and_plan(battle, "warrior", Vector2i(19, y))
 	var outer_id := battle._breach_wall_id
 	_check(outer_id.begins_with("wall_25_"), "with two wall layers the outer wall is breached first (%s)" % outer_id)
 	battle._on_building_destroyed(outer_id)
@@ -106,7 +107,7 @@ func _test_second_wall_layer() -> void:
 
 func _test_reachable_buildings_come_before_walls() -> void:
 	var battle := _make_battle([25], true)
-	battle.deploy("warrior", Vector2i(10, 20))
+	battle_deploy_and_plan(battle, "warrior", Vector2i(10, 20))
 	var attacker: TroopActor = battle.attacker_units[0]
 	_check(is_instance_valid(attacker.target) and attacker.target.building_type == "barracks", "a reachable building is always preferred to a wall")
 	battle._on_building_destroyed("outside_barracks")
@@ -148,6 +149,12 @@ func _add_structure(village: VillageModel, object_id: String, building_id: Strin
 		"cell": cell, "footprint": footprint,
 		"hp": int(definition.get("hp", 250)), "max_hp": int(definition.get("hp", 250)), "level": 1,
 	})
+
+
+func battle_deploy_and_plan(battle: BattleManager, troop_id: String, cell: Vector2i) -> bool:
+	var ok := battle.deploy(troop_id, cell)
+	battle.settle_planning()
+	return ok
 
 
 func _run_ticks(battle: BattleManager, seconds: float) -> void:

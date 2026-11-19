@@ -29,6 +29,7 @@ func _run() -> void:
 	_check(battle.is_valid_deployment_cell(Vector2i(20, 30)), "deployment is allowed at the five-tile boundary")
 	_check(battle.deploy("warrior", Vector2i(20, 30)), "legal troop deployment starts the active battle")
 	_check(battle.attacker_units.size() == 1, "battle manager creates the deployed troop")
+	battle.settle_planning()  # Planning is spread over a few frames; let it finish.
 	if not battle.attacker_units.is_empty():
 		var actor := battle.attacker_units[0]
 		_check(is_instance_valid(actor.target) and actor.target is BattleBuildingTarget, "attacker receives a live building target")

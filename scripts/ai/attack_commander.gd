@@ -32,6 +32,8 @@ var reserve_goblins_only := true
 const OPENING_DELAY := 4.0
 const SAMPLE_STEPS := 14
 const TEAM_DPS := 120.0
+## How long (battle seconds) a scoring of the deploy tiles is reused.
+const SCORE_CACHE_SECONDS := 1.5
 const WALL_PENALTY := 14.0
 ## How far from the best entry point (in tiles) troops may be spread out.
 const CLUSTER_RADIUS := 6.0
@@ -60,6 +62,7 @@ var _cooldown := 0.0
 var _objective_id := ""
 var _objective_name := ""
 var _recent_cells: Array[Vector2i] = []
+var _score_cache: Dictionary = {}
 var _queue: Array[String] = []
 var _group_key := ""
 var _group_count := 0
@@ -388,24 +391,33 @@ func _wall_alive(cell: Vector2i) -> bool:
 ## (never across the map: the push stays together).
 func _best_cell(target_pos: Vector2, troop_id: String, avoid: Array[Vector2i], stride: int = 1) -> Dictionary:
 	var defenses := _defenses()
+	# Scoring every tile is the expensive part, and the answer only changes when the defenses or the target change,
+	# so one scoring is reused for a second or so (all the troops of one wave share it).
+	var cache_key := "%s|%d|%d|%d|%d" % [troop_id, int(target_pos.x), int(target_pos.y), stride, defenses.size()]
+	var cached: Dictionary = _score_cache.get(cache_key, {})
 	var scored: Array[Dictionary] = []
 	var best := {}
 	var best_cost := INF
-	var index := 0
-	for cell in _candidates:
-		index += 1
-		if stride > 1 and index % stride != 0:
-			continue
-		if not battle.is_valid_deployment_cell(cell):
-			continue
-		var from_point := village.grid.cell_to_world(Vector2(cell))
-		var approach := _approach_damage(from_point, target_pos, troop_id, defenses)
-		var cost := approach + 0.12 * from_point.distance_to(target_pos) + _wall_cost(from_point, target_pos, troop_id)
-		var entry := {"cell": cell, "cost": cost, "approach": approach}
-		scored.append(entry)
-		if cost < best_cost:
-			best_cost = cost
-			best = entry
+	if not cached.is_empty() and _clock - float(cached["time"]) < SCORE_CACHE_SECONDS:
+		scored = cached["scored"]
+		best = cached["best"]
+	else:
+		var index := 0
+		for cell in _candidates:
+			index += 1
+			if stride > 1 and index % stride != 0:
+				continue
+			if not battle.is_valid_deployment_cell(cell):
+				continue
+			var from_point := village.grid.cell_to_world(Vector2(cell))
+			var approach := _approach_damage(from_point, target_pos, troop_id, defenses)
+			var cost := approach + 0.12 * from_point.distance_to(target_pos) + _wall_cost(from_point, target_pos, troop_id)
+			var entry := {"cell": cell, "cost": cost, "approach": approach}
+			scored.append(entry)
+			if cost < best_cost:
+				best_cost = cost
+				best = entry
+		_score_cache[cache_key] = {"time": _clock, "scored": scored, "best": best}
 	if best.is_empty() or avoid.is_empty():
 		return best
 	var anchor: Vector2i = best["cell"]

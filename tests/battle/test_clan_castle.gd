@@ -179,6 +179,7 @@ func _test_troop_versus_troop_combat() -> void:
 	var setup := _new_battle()
 	var battle: BattleManager = setup["battle"]
 	battle.deploy("warrior", _find_cell(battle, setup["castle_pos"], false))
+	battle.settle_planning()  # Planning is spread over frames; start from a settled attacker.
 	var attacker: TroopActor = battle.attacker_units[0]
 	var defender := TroopActor.new()
 	defender.configure("archer")
@@ -252,7 +253,7 @@ func _test_replan_queue_and_recovery() -> void:
 	var started := Time.get_ticks_usec()
 	_tick(battle, DT)
 	var first_frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
-	_check(battle._replan_queue.size() == battle._living_attackers().size() - BattleManager.REPLANS_PER_FRAME, "only a few plans are served per frame")
+	_check(battle._replan_queue.size() == battle._living_attackers().size() - 1, "only one troop's plan is started per frame")
 	_check(first_frame_ms < 400.0, "a queued re-plan does not freeze the frame (%.0f ms)" % first_frame_ms)
 	_run_ticks(battle, 1.0)
 	_check(battle._replan_queue.is_empty(), "the re-plan queue drains")

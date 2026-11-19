@@ -112,23 +112,23 @@ func _build_tower_parts(type: String, texture: Texture2D) -> void:
 		overlay.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		# A child of the art: it scales, flashes and pops exactly like the building does.
 		overlay.position = rect.position - texture_size * 0.5
-		var material := ShaderMaterial.new()
-		material.shader = WAVE_SHADER
-		material.set_shader_parameter("phase", randf() * TAU)
+		var wave_material := ShaderMaterial.new()
+		wave_material.shader = WAVE_SHADER
+		wave_material.set_shader_parameter("phase", randf() * TAU)
 		if part_name == "archer":
-			material.set_shader_parameter("pin_top", 0.0)
-			material.set_shader_parameter("amp_x", 0.004)
-			material.set_shader_parameter("amp_y", 0.010)
-			material.set_shader_parameter("speed", 2.1)
-			material.set_shader_parameter("edge", 0.24)
+			wave_material.set_shader_parameter("pin_top", 0.0)
+			wave_material.set_shader_parameter("amp_x", 0.004)
+			wave_material.set_shader_parameter("amp_y", 0.010)
+			wave_material.set_shader_parameter("speed", 2.1)
+			wave_material.set_shader_parameter("edge", 0.24)
 			_archer_overlay = overlay
 		else:
-			material.set_shader_parameter("amp_x", 0.045)
-			material.set_shader_parameter("freq", 6.5)
-			material.set_shader_parameter("speed", 2.4)
-			material.set_shader_parameter("edge", 0.16)
+			wave_material.set_shader_parameter("amp_x", 0.045)
+			wave_material.set_shader_parameter("freq", 6.5)
+			wave_material.set_shader_parameter("speed", 2.4)
+			wave_material.set_shader_parameter("edge", 0.16)
 			_banner_overlays.append(overlay)
-		overlay.material = material
+		overlay.material = wave_material
 		_sprite.add_child(overlay)
 
 
@@ -266,9 +266,9 @@ func _process(delta: float) -> void:
 			if _archer_turn_timer <= 0.0:
 				_archer_overlay.flip_h = not _archer_overlay.flip_h  # Idle lookout: turns to watch the other side.
 				_archer_turn_timer = randf_range(4.5, 9.0)
-		var material := _archer_overlay.material as ShaderMaterial
+		var archer_material := _archer_overlay.material as ShaderMaterial
 		# In the art the archer always faces +x, so leaning back is a +x sample shift whichever way he is turned.
-		material.set_shader_parameter("push", Vector2(0.028 * charge + 0.02 * _recoil, -0.014 * _recoil))
+		archer_material.set_shader_parameter("push", Vector2(0.028 * charge + 0.02 * _recoil, -0.014 * _recoil))
 
 
 func set_selected(value: bool) -> void:

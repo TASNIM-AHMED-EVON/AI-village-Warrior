@@ -9,6 +9,7 @@ BASE = Path(__file__).resolve().parents[1]
 TESTS = [
     'tests/pathfinding/test_grid_pathfinder.gd',
     'tests/pathfinding/test_path_smoother.gd',
+    'tests/pathfinding/test_path_sweep.gd',
     'tests/pathfinding/test_path_visual_trace.gd',
     'tests/pathfinding/test_pathfinder_equivalence.gd',
     'tests/ai/test_battle_search_ai.gd',
@@ -18,6 +19,7 @@ TESTS = [
     'tests/battle/test_trial_commander.gd',
     'tests/battle/test_troop_spreading.gd',
     'tests/battle/test_diagonal_movement.gd',
+    'tests/battle/test_planning_budget.gd',
     'tests/battle/test_wizard_tower.gd',
     'tests/battle/test_wall_breach.gd',
     'tests/battle/test_attack_visuals.gd',

@@ -643,7 +643,7 @@ func _refresh_training_row(troop_id: String) -> void:
 
 func _train_set_max(troop_id: String) -> void:
 	var cost := int(TroopCatalog.get_definition(troop_id)["cost"])
-	var affordable := clampi(int(village.elixir / maxi(cost, 1)), 1, VillageModel.MAX_TRAIN_BATCH)
+	var affordable := clampi(floori(float(village.elixir) / float(maxi(cost, 1))), 1, VillageModel.MAX_TRAIN_BATCH)
 	(_train_rows[troop_id]["spin"] as SpinBox).value = affordable
 	_refresh_training_row(troop_id)
 
