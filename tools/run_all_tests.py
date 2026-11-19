@@ -17,6 +17,8 @@ TESTS = [
     'tests/battle/test_clan_castle.gd',
     'tests/battle/test_trial_commander.gd',
     'tests/battle/test_troop_spreading.gd',
+    'tests/battle/test_diagonal_movement.gd',
+    'tests/battle/test_wizard_tower.gd',
     'tests/battle/test_wall_breach.gd',
     'tests/battle/test_attack_visuals.gd',
     'tests/battle/test_battle_frames.gd',

@@ -2,7 +2,7 @@ extends Control
 ## One visual language across title, village, battle and AI arena.
 
 const UI_THEME := preload("res://themes/medieval_ui.tres")
-const HALL := preload("res://assets/buildings/town_hall_sprite.png")
+const HALL := preload("res://assets/generated/town_hall_royal_sprite.png")
 const TOWER := preload("res://assets/buildings/archer_tower_sprite.png")
 
 var _hero: TextureRect

@@ -1,6 +1,13 @@
 extends RefCounted
 class_name GridPathfinder
-## Four-neighbour grid search used by attacking and defending troops.
+## Eight-direction grid search used by attacking and defending troops: a troop may step up, down, left, right
+## AND diagonally, so routes head straight at their goal instead of staircasing along the grid axes.
+##
+## Costs are the real distance a troop walks across the isometric map, in pixels: a step along a grid axis is about
+## 27 px, a diagonal that looks like straight up or down on screen is 24 px, and a diagonal that looks like straight
+## left or right is 48 px. Measuring in screen distance makes "shortest" mean what the player sees. A diagonal step
+## is only allowed when both cells it passes between are free, so a route never squeezes through the corner where two
+## buildings touch. BFS is unweighted: it finds the route with the fewest moves, and a diagonal counts as one move.
 ##
 ## Performance notes: the search runs on flat arrays indexed by `y * width + x` and keeps its open
 ## list in a binary heap ordered by (score, insertion sequence). That selects exactly the cell the
@@ -12,8 +19,25 @@ const BFS := "BFS"
 const GREEDY_BFS := "Greedy BFS"
 const BEST_FIRST := "Weighted Best-First Search"
 const ALGORITHMS := [ASTAR, BFS, GREEDY_BFS, BEST_FIRST]
-const _DX := [1, 0, -1, 0]
-const _DY := [0, 1, 0, -1]
+## The first four directions are straight, the last four diagonal. The order is part of the contract: ties between
+## equally good cells are broken by who was inserted first, and tests compare against a reference implementation.
+const _DX := [1, 0, -1, 0, 1, -1, -1, 1]
+const _DY := [0, 1, 0, -1, 1, 1, -1, -1]
+## Screen distance of each direction above, in pixels (tile 48 x 24: an axis step is (24, 12), a "down" diagonal (0, 24)).
+const _STEP_COST := [27, 27, 27, 27, 24, 48, 24, 48]
+const _AXIS_STEP_PIXELS := 26.83
+
+
+## Length of a route in cells of walking, where one step along a grid axis counts as 1 (what the AI uses as distance).
+static func path_length(path: Array[Vector2i]) -> float:
+	var total := 0.0
+	for index in range(1, path.size()):
+		var step := path[index] - path[index - 1]
+		if step.x != 0 and step.y != 0:
+			total += (24.0 if step.x == step.y else 48.0) / _AXIS_STEP_PIXELS
+		else:
+			total += 1.0
+	return total
 
 
 static func find_path_to_any(grid: VillageGrid, start: Vector2i, goals: Array[Vector2i], algorithm: String = ASTAR, trace: Dictionary = {}) -> Array[Vector2i]:
@@ -93,7 +117,7 @@ static func _search_bfs(width: int, height: int, start_index: int, is_goal: Pack
 		var cx := current % width
 		@warning_ignore("integer_division")
 		var cy := current / width
-		for direction in range(4):
+		for direction in range(8):
 			var nx: int = cx + _DX[direction]
 			var ny: int = cy + _DY[direction]
 			if nx < 0 or ny < 0 or nx >= width or ny >= height:
@@ -101,6 +125,8 @@ static func _search_bfs(width: int, height: int, start_index: int, is_goal: Pack
 			var neighbor := ny * width + nx
 			if blocked[neighbor] == 1 or cost[neighbor] != -1:
 				continue  # Unit costs: the first discovery is always the cheapest.
+			if direction >= 4 and (blocked[cy * width + nx] == 1 or blocked[ny * width + cx] == 1):
+				continue  # No cutting a corner between two blocked cells.
 			cost[neighbor] = cost[current] + 1
 			parent[neighbor] = current
 			queue.append(neighbor)
@@ -137,7 +163,7 @@ static func _search_scored(algorithm: String, width: int, height: int, start_ind
 		var cx := current % width
 		@warning_ignore("integer_division")
 		var cy := current / width
-		for direction in range(4):
+		for direction in range(8):
 			var nx: int = cx + _DX[direction]
 			var ny: int = cy + _DY[direction]
 			if nx < 0 or ny < 0 or nx >= width or ny >= height:
@@ -145,7 +171,9 @@ static func _search_scored(algorithm: String, width: int, height: int, start_ind
 			var neighbor := ny * width + nx
 			if blocked[neighbor] == 1:
 				continue
-			var next_cost := cost[current] + 1
+			if direction >= 4 and (blocked[cy * width + nx] == 1 or blocked[ny * width + cx] == 1):
+				continue  # No cutting a corner between two blocked cells.
+			var next_cost := cost[current] + int(_STEP_COST[direction])
 			var known_cost := cost[neighbor]
 			if known_cost != -1 and next_cost >= known_cost:
 				continue
@@ -177,12 +205,15 @@ static func _frontier_score(algorithm: String, path_cost: int, heuristic: float)
 
 
 static func _nearest_distance(x: int, y: int, goal_xs: PackedInt32Array, goal_ys: PackedInt32Array) -> float:
-	var nearest := 1 << 30
+	var nearest_distance := 1.0e30
 	for index in range(goal_xs.size()):
-		var distance := absi(x - goal_xs[index]) + absi(y - goal_ys[index])
-		if distance < nearest:
-			nearest = distance
-	return float(nearest)
+		# Straight-line screen distance to the goal cell: never longer than any real route, so A* stays exact.
+		var across := float(((x - goal_xs[index]) - (y - goal_ys[index])) * 24)
+		var down := float(((x - goal_xs[index]) + (y - goal_ys[index])) * 12)
+		var distance := sqrt(across * across + down * down)
+		if distance < nearest_distance:
+			nearest_distance = distance
+	return nearest_distance
 
 
 static func _to_cell(index: int, width: int) -> Vector2i:

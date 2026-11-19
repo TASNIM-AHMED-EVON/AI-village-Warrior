@@ -1,13 +1,14 @@
 extends Node2D
 
 const UI_THEME := preload("res://themes/medieval_ui.tres")
-const BUILD_OPTIONS := ["cannon", "archer_tower", "clan_castle", "gold_mine", "elixir_pump", "barracks", "laboratory", "wall"]
+const BUILD_OPTIONS := ["cannon", "archer_tower", "wizard_tower", "clan_castle", "gold_mine", "elixir_pump", "barracks", "laboratory", "wall"]
 const BUILDING_ART := {
-	"town_hall": "res://assets/buildings/town_hall_sprite.png",
+	"town_hall": "res://assets/generated/town_hall_royal_sprite.png",
 	"barracks": "res://assets/buildings/barracks_sprite.png",
 	"cannon": "res://assets/buildings/cannon_sprite.png",
 	"wall": "res://assets/generated/stone_wall.png",
 	"archer_tower": "res://assets/buildings/archer_tower_sprite.png",
+	"wizard_tower": "res://assets/generated/wizard_tower_sprite.png",
 	"clan_castle": "res://assets/buildings/clan_castle_sprite.png",
 	"laboratory": "res://assets/generated/laboratory_sprite.png",
 	"gold_mine": "res://assets/buildings/gold_mine_sprite.png",
@@ -166,8 +167,8 @@ func _build_hud() -> void:
 	_build_panel.anchor_top = 1.0
 	_build_panel.anchor_right = 0.5
 	_build_panel.anchor_bottom = 1.0
-	_build_panel.offset_left = -520
-	_build_panel.offset_right = 520
+	_build_panel.offset_left = -560
+	_build_panel.offset_right = 560
 	_build_panel.offset_top = -178
 	_build_panel.offset_bottom = -92
 	_build_panel.visible = false
@@ -178,7 +179,7 @@ func _build_hud() -> void:
 	for building_id in BUILD_OPTIONS:
 		var definition := BuildingCatalog.get_definition(building_id)
 		var button := _new_button("+  %s\n%d gold" % [definition["name"], definition["cost"]], _select_building.bind(building_id))
-		button.custom_minimum_size = Vector2(116, 62)
+		button.custom_minimum_size = Vector2(108, 62)
 		button.icon = objects.preview_art(building_id)
 		button.expand_icon = true
 		button.add_theme_constant_override("icon_max_width", 44)

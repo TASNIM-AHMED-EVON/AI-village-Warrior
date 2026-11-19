@@ -102,7 +102,7 @@ class Projectile extends Node2D:
 		var p := clampf(progress, 0.0, 1.0)
 		var point := _from.lerp(_to, p)
 		point.y -= _arc * sin(p * PI)
-		if _kind == "magic":
+		if _kind == "magic" or _kind == "arcane":
 			var side := (_to - _from).orthogonal().normalized()
 			point += side * sin(p * PI * 6.0) * 3.5 * (1.0 - p)
 		return point
@@ -133,6 +133,20 @@ class Projectile extends Node2D:
 	func _draw() -> void:
 		if _kind == "fire":
 			return  # The dragon's stream is drawn by the dragon; this only times the impact flare.
+		if _kind == "arcane":
+			# The Wizard Tower's bolt: a big cyan-violet orb with a glittering tail.
+			var surge := 1.0 + 0.2 * sin(_age * 30.0)
+			for index in range(_trail.size() - 1):
+				var tail := float(index + 1) / float(_trail.size())
+				draw_circle(_trail[index] - position, 9.0 * tail, Color(0.50, 0.78, 1.0, 0.28 * tail))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2(_visual_scale, _visual_scale))
+			draw_circle(Vector2.ZERO, 19.0 * surge, Color(0.55, 0.4, 1.0, 0.25))
+			draw_circle(Vector2.ZERO, 12.0 * surge, Color(0.55, 0.85, 1.0, 0.8))
+			draw_circle(Vector2.ZERO, 6.0, Color(0.96, 0.98, 1.0))
+			for index in range(4):
+				var orbit := _age * 18.0 + TAU * float(index) / 4.0
+				draw_circle(Vector2(cos(orbit), sin(orbit)) * 15.0, 2.2, Color(1.0, 0.9, 1.0, 0.95))
+			return
 		if _kind == "magic":
 			var pulse := 1.0 + 0.18 * sin(_age * 38.0)
 			for index in range(_trail.size() - 1):
@@ -168,7 +182,7 @@ class ImpactBurst extends Node2D:
 	func configure(fx: Node, kind: String) -> void:
 		_fx = fx
 		_kind = kind
-		_life = 0.36 if kind == "magic" else (0.42 if kind == "fire" else 0.24)
+		_life = 0.36 if kind == "magic" else (0.42 if kind == "fire" else (0.55 if kind == "arcane" else 0.24))
 		z_index = 26
 
 	func _process(delta: float) -> void:
@@ -193,6 +207,18 @@ class ImpactBurst extends Node2D:
 			for index in range(6):
 				var rise := Vector2(sin(float(index) * 2.3) * 10.0, -10.0 - 28.0 * progress * (0.6 + 0.12 * float(index)))
 				draw_circle(rise, 2.6 * fade + 0.6, Color(1.0, 0.7, 0.2, fade))
+			return
+		if _kind == "arcane":
+			# A shockwave rolling out over the ground: this is the tower's splash radius.
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2(_visual_scale, _visual_scale * 0.55))
+			draw_circle(Vector2.ZERO, 62.0 * progress, Color(0.5, 0.45, 1.0, 0.22 * fade))
+			draw_arc(Vector2.ZERO, 62.0 * progress, 0.0, TAU, 40, Color(0.7, 0.9, 1.0, 0.95 * fade), 4.0, true)
+			draw_arc(Vector2.ZERO, 40.0 * progress, 0.0, TAU, 32, Color(0.9, 0.7, 1.0, 0.8 * fade), 2.5, true)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2(_visual_scale, _visual_scale))
+			draw_circle(Vector2.ZERO, 16.0 * fade, Color(0.9, 0.95, 1.0, 0.7 * fade))
+			for index in range(10):
+				var spark := Vector2.RIGHT.rotated(TAU * float(index) / 10.0 + 0.3)
+				draw_line(spark * (6.0 + 20.0 * progress), spark * (12.0 + 34.0 * progress), Color(0.85, 0.9, 1.0, fade), 2.4, true)
 			return
 		if _kind == "magic":
 			draw_circle(Vector2.ZERO, 12.0 * fade, Color(0.8, 0.65, 1.0, 0.5 * fade))

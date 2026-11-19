@@ -1,7 +1,7 @@
 # Reference (original, unoptimised) pathfinder kept only so tests can prove GridPathfinder returns identical routes.
 extends RefCounted
 
-## Four-neighbour grid search used by attacking troops.
+## Eight-direction grid search used by attacking troops (steps cost their screen distance in pixels, no corner cutting).
 
 const ASTAR := "A* Search"
 const BFS := "BFS"
@@ -49,7 +49,16 @@ static func find_path_to_any(grid: VillageGrid, start: Vector2i, goals: Array[Ve
 				continue
 			if grid.occupied.has(neighbor) and not goal_lookup.has(neighbor):
 				continue
-			var next_cost := int(cost_so_far[current]) + 1
+			var is_diagonal := neighbor.x != current.x and neighbor.y != current.y
+			if is_diagonal and (grid.occupied.has(Vector2i(neighbor.x, current.y)) or grid.occupied.has(Vector2i(current.x, neighbor.y))):
+				continue
+			# BFS counts moves (every move is 1); the scored searches use the screen distance of the step.
+			var step_cost := 1
+			if algorithm != BFS:
+				step_cost = 27
+				if is_diagonal:
+					step_cost = 24 if neighbor.x - current.x == neighbor.y - current.y else 48
+			var next_cost := int(cost_so_far[current]) + step_cost
 			if cost_so_far.has(neighbor) and next_cost >= int(cost_so_far[neighbor]):
 				continue
 			cost_so_far[neighbor] = next_cost
@@ -100,10 +109,14 @@ static func _best_frontier_index(frontier: Array[Vector2i], costs: Dictionary, g
 static func _nearest_goal_distance(cell: Vector2i, goals: Dictionary) -> float:
 	var nearest := INF
 	for goal in goals.keys():
-		var distance := absi(cell.x - goal.x) + absi(cell.y - goal.y)
-		nearest = minf(nearest, float(distance))
+		var across := float(((cell.x - goal.x) - (cell.y - goal.y)) * 24)
+		var down := float(((cell.x - goal.x) + (cell.y - goal.y)) * 12)
+		nearest = minf(nearest, sqrt(across * across + down * down))
 	return nearest
 
 
 static func _neighbors(cell: Vector2i) -> Array[Vector2i]:
-	return [cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(-1, 0), cell + Vector2i(0, -1)]
+	return [
+		cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(-1, 0), cell + Vector2i(0, -1),
+		cell + Vector2i(1, 1), cell + Vector2i(-1, 1), cell + Vector2i(-1, -1), cell + Vector2i(1, -1),
+	]

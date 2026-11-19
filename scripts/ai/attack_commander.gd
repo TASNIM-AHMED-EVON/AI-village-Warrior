@@ -16,9 +16,10 @@ class_name AttackCommander
 signal decided(text: String)
 
 ## What the base's defenses do (mirrors BattleManager._update_defenses).
-const DEFENSE_REACH := {"cannon": 330.0, "archer_tower": 270.0}
-const DEFENSE_DPS := {"cannon": 28.0, "archer_tower": 28.0}
-const DEFENSE_HITS_AIR := {"cannon": false, "archer_tower": true}
+const DEFENSE_REACH := {"cannon": 330.0, "archer_tower": 270.0, "wizard_tower": 300.0}
+## The wizard tower's number includes its splash, which hurts clumped troops more than a single shot would.
+const DEFENSE_DPS := {"cannon": 28.0, "archer_tower": 28.0, "wizard_tower": 28.0}
+const DEFENSE_HITS_AIR := {"cannon": false, "archer_tower": true, "wizard_tower": true}
 ## The Clan Castle counts as a defense of this strength until its garrison has been dealt with.
 const CASTLE_DPS := 45.0
 ## Tunable so the strategy can be tested (see tests): how fast troops are dropped and how tightly they cluster.
@@ -32,6 +33,8 @@ const OPENING_DELAY := 4.0
 const SAMPLE_STEPS := 14
 const TEAM_DPS := 120.0
 const WALL_PENALTY := 14.0
+## How far from the best entry point (in tiles) troops may be spread out.
+const CLUSTER_RADIUS := 6.0
 const MAX_CANDIDATES := 220
 const COMPASS := ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
 
@@ -239,6 +242,7 @@ func _say(text: String) -> void:
 func _analyse() -> void:
 	var cannons := 0
 	var towers := 0
+	var wizards := 0
 	var castle: Dictionary = {}
 	var town_hall: Dictionary = {}
 	var objective_count := 0
@@ -248,16 +252,21 @@ func _analyse() -> void:
 				cannons += 1
 			"archer_tower":
 				towers += 1
+			"wizard_tower":
+				wizards += 1
 			"clan_castle":
 				castle = structure
 			"town_hall":
 				town_hall = structure
 		if str(structure["type"]) != "wall":
 			objective_count += 1
-	_initial_defenses = cannons + towers
+	_initial_defenses = cannons + towers + wizards
 	briefing.append("LAYOUT ANALYSIS")
 	briefing.append("• %d buildings must fall for 3 stars." % objective_count)
-	briefing.append("• Defenses: %d cannons (ground only) and %d archer towers (hit air too)." % [cannons, towers])
+	if wizards > 0:
+		briefing.append("• Defenses: %d cannons (ground only), %d archer towers and %d wizard towers (both hit air; wizards splash)." % [cannons, towers, wizards])
+	else:
+		briefing.append("• Defenses: %d cannons (ground only) and %d archer towers (hit air too)." % [cannons, towers])
 	if not castle.is_empty():
 		briefing.append("• Clan Castle at %s, garrison: %s." % [_cell_label(castle["cell"]), ClanCastle.describe(ClanCastle.sanitize(castle.get("garrison", null)))])
 	if not town_hall.is_empty():
@@ -374,9 +383,12 @@ func _wall_alive(cell: Vector2i) -> bool:
 	return occupant != null and battle.building_targets.has(str(occupant))
 
 
-## Best deployment cell for `troop_id` heading for `target_pos`.
+## Best deployment cell for `troop_id` heading for `target_pos`. First the best entry point is found on cost alone;
+## then, if recent drops are crowding it, the troop is spread to a free tile within a few tiles of that entry point
+## (never across the map: the push stays together).
 func _best_cell(target_pos: Vector2, troop_id: String, avoid: Array[Vector2i], stride: int = 1) -> Dictionary:
 	var defenses := _defenses()
+	var scored: Array[Dictionary] = []
 	var best := {}
 	var best_cost := INF
 	var index := 0
@@ -389,13 +401,29 @@ func _best_cell(target_pos: Vector2, troop_id: String, avoid: Array[Vector2i], s
 		var from_point := village.grid.cell_to_world(Vector2(cell))
 		var approach := _approach_damage(from_point, target_pos, troop_id, defenses)
 		var cost := approach + 0.12 * from_point.distance_to(target_pos) + _wall_cost(from_point, target_pos, troop_id)
-		for other in avoid:
-			if Vector2(cell).distance_to(Vector2(other)) < 3.0:
-				cost += spread_penalty  # Spread troops out a little instead of stacking them on one tile.
+		var entry := {"cell": cell, "cost": cost, "approach": approach}
+		scored.append(entry)
 		if cost < best_cost:
 			best_cost = cost
-			best = {"cell": cell, "cost": cost, "approach": approach}
-	return best
+			best = entry
+	if best.is_empty() or avoid.is_empty():
+		return best
+	var anchor: Vector2i = best["cell"]
+	var spread := _effective_spread_penalty()
+	var chosen := best
+	var chosen_cost := INF
+	for entry in scored:
+		var cell: Vector2i = entry["cell"]
+		if Vector2(cell).distance_to(Vector2(anchor)) > CLUSTER_RADIUS:
+			continue
+		var cost := float(entry["cost"])
+		for other in avoid:
+			if Vector2(cell).distance_to(Vector2(other)) < 3.0:
+				cost += spread
+		if cost < chosen_cost:
+			chosen_cost = cost
+			chosen = entry
+	return chosen
 
 
 ## The building to hit first: the one whose total expected damage (approach + time spent under fire) is lowest.
@@ -436,6 +464,14 @@ func _choose_objective(troop_id: String, prefer_anti_air: bool, town_hall_first:
 			best_cost = cost
 			best = {"id": target.building_id, "name": str(target.building_name), "cost": cost, "pos": target.global_position}
 	return best
+
+
+## Splash defenses (the wizard tower) punish a tight blob, so while one is standing the commander spreads out.
+func _effective_spread_penalty() -> float:
+	for target in battle.building_targets.values():
+		if is_instance_valid(target) and target.hp > 0 and str(target.building_type) == "wizard_tower":
+			return spread_penalty * 4.0
+	return spread_penalty
 
 
 func _set_objective(objective: Dictionary) -> void:

@@ -3,10 +3,11 @@ extends Node2D
 ## No model, battle-rule, or pathfinding data is changed by this layer.
 
 const ART_PATHS := {
-	"town_hall": "res://assets/buildings/town_hall_sprite.png",
+	"town_hall": "res://assets/generated/town_hall_royal_sprite.png",
 	"barracks": "res://assets/buildings/barracks_sprite.png",
 	"cannon": "res://assets/buildings/cannon_sprite.png",
 	"archer_tower": "res://assets/buildings/archer_tower_sprite.png",
+	"wizard_tower": "res://assets/generated/wizard_tower_sprite.png",
 	"clan_castle": "res://assets/buildings/clan_castle_sprite.png",
 	"laboratory": "res://assets/generated/laboratory_sprite.png",
 	"gold_mine": "res://assets/buildings/gold_mine_sprite.png",
@@ -20,11 +21,12 @@ const ART_PATHS := {
 	"dragon": "res://assets/troops/dragon_sprite.png",
 }
 const DIMENSIONS := {
-	"town_hall": Vector2(235, 211),
+	"town_hall": Vector2(235, 225),
 	"barracks": Vector2(228, 153),
 	"laboratory": Vector2(228, 153),
 	"cannon": Vector2(106, 91),
 	"archer_tower": Vector2(142, 201),
+	"wizard_tower": Vector2(142, 201),
 	"clan_castle": Vector2(253, 192),
 	"gold_mine": Vector2(133, 147),
 	"elixir_pump": Vector2(131, 164),
@@ -119,6 +121,18 @@ func play_place(id: String) -> void:
 		entity.play_placement()
 
 
+func set_building_charge(building_id: String, ratio: float) -> void:
+	var entity: VisualEntity = _entities.get(building_id)
+	if is_instance_valid(entity):
+		entity.set_charge(ratio)
+
+
+func play_defense_fire(building_id: String) -> void:
+	var entity: VisualEntity = _entities.get(building_id)
+	if is_instance_valid(entity):
+		entity.play_fire()
+
+
 func flash_structure(id: String) -> void:
 	var entity: VisualEntity = _entities.get(id)
 	if is_instance_valid(entity):
@@ -171,7 +185,7 @@ func _create_structure(structure: Dictionary) -> VisualEntity:
 		sprite_size,
 		Vector2(shadow_half_width, shadow_half_height),
 		shadow_offset,
-		battle_mode and type == "cannon"
+		type == "cannon"
 	)
 	entity.setup_decor(footprint, int(structure.get("level", 1)), not battle_mode, sprite_size)
 	return entity

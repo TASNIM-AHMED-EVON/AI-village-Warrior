@@ -3,8 +3,21 @@ class_name VisualEntity
 ## Presentation-only node: its origin is the front ground edge (Y-sort anchor).
 ## Gameplay still reads VillageModel / BattleManager, never these sprites.
 
-const CANNON_BASE := preload("res://assets/buildings/cannon_base_sprite.png")
+const CANNON_BASE := preload("res://assets/generated/cannon_base_fixed.png")
 const CANNON_GUN := preload("res://assets/buildings/cannon_gun_sprite.png")
+const WAVE_SHADER := preload("res://assets/shaders/region_wave.gdshader")
+## Cut-outs of the tower art that are animated on top of it: (texture, rectangle in the art's pixels).
+const TOWER_PARTS := {
+	"archer_tower": {
+		"archer": ["res://assets/generated/archer_tower_archer.png", Rect2(95, 50, 140, 140)],
+		"banner_l": ["res://assets/generated/archer_tower_banner_l.png", Rect2(94, 258, 46, 88)],
+		"banner_r": ["res://assets/generated/archer_tower_banner_r.png", Rect2(194, 258, 44, 88)],
+	},
+	"wizard_tower": {
+		"banner_l": ["res://assets/generated/wizard_tower_banner_l.png", Rect2(94, 258, 46, 88)],
+		"banner_r": ["res://assets/generated/wizard_tower_banner_r.png", Rect2(194, 258, 44, 88)],
+	},
+}
 const CANNON_GUN_ART_ANGLE := -0.28
 const CANNON_PIVOT_IN_ENTITY := Vector2(-2.0, -58.0)
 
@@ -31,6 +44,20 @@ var _animator: AnimatedSprite2D
 var _cannon_pivot: Node2D
 var _cannon_gun: Sprite2D
 var _cannon_target_angle := 0.0
+## A lazy cannon in the village slowly looks around; in battle it only follows real targets.
+var idle_scan := false
+var _idle_timer := 2.0
+var _last_aim_time := -100.0
+## Defense animation state, fed by the battle: where it aims, how far its next shot is charged, recoil from the last one.
+var tower_aim := Vector2.RIGHT
+var charge := 0.0
+var _recoil := 0.0
+var _archer_overlay: Sprite2D
+var _banner_overlays: Array[Sprite2D] = []
+var _archer_turn_timer := 4.0
+var _sprite_scale := Vector2.ONE
+var _squashed := false
+var _gun_rest := Vector2.ZERO
 
 
 func configure_structure(id: String, type: String, texture: Texture2D, dimensions: Vector2, shadow_size: Vector2, ground_offset: Vector2, rotating_cannon: bool = false) -> void:
@@ -59,9 +86,50 @@ func configure_structure(id: String, type: String, texture: Texture2D, dimension
 		_cannon_gun.centered = true
 		_cannon_gun.scale = _sprite.scale
 		_cannon_gun.position = _sprite.position - _cannon_pivot.position
+		_gun_rest = _cannon_gun.position
 		_cannon_pivot.add_child(_cannon_gun)
 		add_child(_cannon_pivot)
+	_sprite_scale = _sprite.scale
+	_build_tower_parts(type, texture)
 	queue_redraw()
+
+
+## Adds the animated cut-outs (waving banners, the breathing archer) for towers.
+func _build_tower_parts(type: String, texture: Texture2D) -> void:
+	if not TOWER_PARTS.has(type) or texture == null:
+		return
+	var texture_size := texture.get_size()
+	for part_name in TOWER_PARTS[type]:
+		var info: Array = TOWER_PARTS[type][part_name]
+		var part_texture: Variant = load(str(info[0]))
+		if not part_texture is Texture2D:
+			continue
+		var rect: Rect2 = info[1]
+		var overlay := Sprite2D.new()
+		overlay.name = "Anim_" + str(part_name)
+		overlay.texture = part_texture
+		overlay.centered = false
+		overlay.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		# A child of the art: it scales, flashes and pops exactly like the building does.
+		overlay.position = rect.position - texture_size * 0.5
+		var material := ShaderMaterial.new()
+		material.shader = WAVE_SHADER
+		material.set_shader_parameter("phase", randf() * TAU)
+		if part_name == "archer":
+			material.set_shader_parameter("pin_top", 0.0)
+			material.set_shader_parameter("amp_x", 0.004)
+			material.set_shader_parameter("amp_y", 0.010)
+			material.set_shader_parameter("speed", 2.1)
+			material.set_shader_parameter("edge", 0.24)
+			_archer_overlay = overlay
+		else:
+			material.set_shader_parameter("amp_x", 0.045)
+			material.set_shader_parameter("freq", 6.5)
+			material.set_shader_parameter("speed", 2.4)
+			material.set_shader_parameter("edge", 0.16)
+			_banner_overlays.append(overlay)
+		overlay.material = material
+		_sprite.add_child(overlay)
 
 
 ## Called by the object layer once a structure's art exists. `village_mode` adds the level badge and ambient life.
@@ -69,11 +137,13 @@ func setup_decor(footprint_cells: Vector2i, structure_level: int, village_mode: 
 	footprint = footprint_cells
 	level = maxi(structure_level, 1)
 	show_level_badge = village_mode
-	if village_mode and BuildingAmbientFx.supports(entity_type) and _ambient == null:
+	idle_scan = village_mode
+	var wants_ambient := BuildingAmbientFx.supports(entity_type) and (village_mode or BuildingAmbientFx.BATTLE_TYPES.has(entity_type))
+	if wants_ambient and _ambient == null:
 		_ambient = BuildingAmbientFx.new()
 		_ambient.name = "AmbientFx"
 		add_child(_ambient)
-		_ambient.configure(entity_type, sprite_dimensions)
+		_ambient.configure(entity_type, sprite_dimensions, self, not village_mode)
 	_decor_ready = true
 	queue_redraw()
 
@@ -135,14 +205,70 @@ func set_walking(moving: bool, facing_left: bool) -> void:
 
 
 func set_cannon_aim(direction: Vector2) -> void:
-	if _cannon_pivot == null or direction.length_squared() < 0.001:
+	if direction.length_squared() < 0.001:
 		return
-	_cannon_target_angle = direction.angle() - CANNON_GUN_ART_ANGLE
+	_last_aim_time = Time.get_ticks_msec() * 0.001
+	tower_aim = direction.normalized()
+	if _archer_overlay != null and absf(direction.x) > 0.12:
+		_archer_overlay.flip_h = direction.x < 0.0  # The archer turns to face his target.
+	if _cannon_pivot != null:
+		_cannon_target_angle = direction.angle() - CANNON_GUN_ART_ANGLE
+
+
+## How far the defense's next shot is charged (0..1): the archer draws back, the wizard's crystal swells.
+func set_charge(value: float) -> void:
+	charge = clampf(value, 0.0, 1.0)
+
+
+## Recoil and a flash when the defense fires.
+func play_fire() -> void:
+	_recoil = 1.0
+	if _ambient != null:
+		_ambient.fire_flash(tower_aim)
+
+
+func muzzle_position() -> Vector2:
+	if _cannon_pivot == null:
+		return Vector2(0, -90)
+	# In battle the smoke belongs where the barrel is turning to; the lazy village cannon uses where it points now.
+	var angle := _cannon_pivot.rotation if idle_scan else _cannon_target_angle
+	return _cannon_pivot.position + Vector2.from_angle(angle + CANNON_GUN_ART_ANGLE) * 46.0
 
 
 func _process(delta: float) -> void:
+	var now := Time.get_ticks_msec() * 0.001
+	_recoil = maxf(0.0, _recoil - delta * 5.5)
 	if _cannon_pivot != null:
-		_cannon_pivot.rotation = rotate_toward(_cannon_pivot.rotation, _cannon_target_angle, 5.0 * delta)
+		var turn_speed := 5.0
+		if idle_scan and now - _last_aim_time > 1.5:
+			# Nothing to shoot at: the cannon lazily looks around.
+			_idle_timer -= delta
+			if _idle_timer <= 0.0:
+				_cannon_target_angle = randf_range(-1.3, 1.0)
+				_idle_timer = randf_range(2.6, 5.8)
+			turn_speed = 0.6
+		_cannon_pivot.rotation = rotate_toward(_cannon_pivot.rotation, _cannon_target_angle, turn_speed * delta)
+		if _cannon_gun != null:
+			var kick := Vector2.from_angle(_cannon_pivot.rotation + CANNON_GUN_ART_ANGLE) * -7.0 * _recoil
+			var breathe := Vector2(0.0, sin(now * 1.6) * 0.5) if idle_scan else Vector2.ZERO
+			_cannon_gun.position = _gun_rest + kick / maxf(absf(_sprite_scale.x), 0.01) * 0.5 + breathe
+	if _sprite != null and TOWER_PARTS.has(entity_type):
+		if _recoil > 0.0:
+			# A tower squashes down a little when it shoots.
+			_sprite.scale = Vector2(_sprite_scale.x * (1.0 + 0.012 * _recoil), _sprite_scale.y * (1.0 - 0.03 * _recoil))
+			_squashed = true
+		elif _squashed:
+			_sprite.scale = _sprite_scale
+			_squashed = false
+	if _archer_overlay != null:
+		if idle_scan and now - _last_aim_time > 2.0:
+			_archer_turn_timer -= delta
+			if _archer_turn_timer <= 0.0:
+				_archer_overlay.flip_h = not _archer_overlay.flip_h  # Idle lookout: turns to watch the other side.
+				_archer_turn_timer = randf_range(4.5, 9.0)
+		var material := _archer_overlay.material as ShaderMaterial
+		# In the art the archer always faces +x, so leaning back is a +x sample shift whichever way he is turned.
+		material.set_shader_parameter("push", Vector2(0.028 * charge + 0.02 * _recoil, -0.014 * _recoil))
 
 
 func set_selected(value: bool) -> void:

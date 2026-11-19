@@ -4,7 +4,7 @@ class_name TrialVillage
 ## something real to analyse: a walled core with four defenses, a Clan Castle on the east flank, and soft
 ## outlying buildings. It is built fresh each time and never touches the player's saved village.
 
-const ARMY := {"warrior": 4, "archer": 5, "mage": 2, "goblin": 4, "tank": 2, "dragon": 2}
+const ARMY := {"warrior": 4, "archer": 5, "mage": 2, "goblin": 4, "tank": 3, "dragon": 2}
 ## Upgrade steps applied to every cannon and archer tower, so the fortress hits back with real hit points.
 const DEFENSE_UPGRADES := 3
 
@@ -25,6 +25,7 @@ static func build() -> VillageModel:
 	village.add_layout_structure("cannon", Vector2i(34, 34))
 	village.add_layout_structure("archer_tower", Vector2i(34, 26))
 	village.add_layout_structure("archer_tower", Vector2i(26, 34))
+	village.add_layout_structure("wizard_tower", Vector2i(30, 26))
 	village.add_layout_structure("gold_mine", Vector2i(26, 30))
 	village.add_layout_structure("elixir_pump", Vector2i(34, 30))
 	for index in range(24, 38):
@@ -46,7 +47,7 @@ static func build() -> VillageModel:
 		village.add_layout_structure("wall", Vector2i(index, 46))
 	for structure in village.structures:
 		var type := str(structure["type"])
-		if type == "cannon" or type == "archer_tower" or type == "town_hall":
+		if type == "cannon" or type == "archer_tower" or type == "wizard_tower" or type == "town_hall":
 			for _step in range(DEFENSE_UPGRADES):
 				village.upgrade_structure(structure["id"])
 		elif type == "clan_castle":

@@ -394,7 +394,7 @@ func _building_value(structure: Dictionary, troop_id: String) -> float:
 		return 120.0
 	if type == "gold_mine" or type == "elixir_pump":
 		return 82.0 if troop_id == "goblin" else 58.0
-	if type == "cannon" or type == "archer_tower" or type == "mage_tower":
+	if type == "cannon" or type == "archer_tower" or type == "mage_tower" or type == "wizard_tower":
 		return 78.0
 	if type == ClanCastle.BUILDING_ID:
 		return 72.0

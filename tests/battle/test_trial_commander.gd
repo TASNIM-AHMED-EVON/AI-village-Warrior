@@ -29,6 +29,7 @@ func _test_trial_village() -> void:
 	var buildings := 0
 	var cannons := 0
 	var towers := 0
+	var wizards := 0
 	var castle: Dictionary = {}
 	for structure in village.structures:
 		if str(structure["type"]) == "wall":
@@ -36,9 +37,10 @@ func _test_trial_village() -> void:
 		buildings += 1
 		if str(structure["type"]) == "cannon": cannons += 1
 		if str(structure["type"]) == "archer_tower": towers += 1
+		if str(structure["type"]) == "wizard_tower": wizards += 1
 		if str(structure["type"]) == "clan_castle": castle = structure
-	_check(buildings == 14, "the trial fortress has 14 buildings to destroy (got %d)" % buildings)
-	_check(cannons == 3 and towers == 3, "the fortress has three cannons and three archer towers")
+	_check(buildings == 15, "the trial fortress has 15 buildings to destroy (got %d)" % buildings)
+	_check(cannons == 3 and towers == 3 and wizards == 1, "the fortress has three cannons, three archer towers and a wizard tower")
 	_check(not castle.is_empty() and ClanCastle.housing_used(ClanCastle.sanitize(castle.get("garrison", null))) > 0, "the Clan Castle holds a garrison")
 	_check(village.army["dragon"] > 0 and village.army["tank"] > 0, "the trial army includes dragons and tanks")
 	var again := TrialVillage.build()
@@ -73,11 +75,21 @@ func _test_commander() -> void:
 	_check(battle.total_deployed == commander.deployments.size(), "every deployment really reached the battle")
 	for entry in commander.deployments:
 		_check(village.grid.contains_cell(entry["cell"]), "deployment cells are inside the map")
-	var sides := {}
+	# The ground push stays on one stretch of the map: every tank, warrior, archer and mage drop is within 70 degrees
+	# of the average direction (dragons fly in where fewer defenses can hit air, goblins are reserves).
+	var centre := commander._base_centre()
+	var mean := Vector2.ZERO
+	var drops: Array[Vector2] = []
 	for entry in commander.deployments:
-		if str(entry["troop"]) != "goblin":
-			sides[commander._side_of(village.grid.cell_to_world(Vector2(entry["cell"])))] = true
-	_check(sides.size() <= 2, "the main push is concentrated on one side (used %d sides)" % sides.size())
+		if str(entry["troop"]) != "goblin" and str(entry["troop"]) != "dragon":
+			var direction := (village.grid.cell_to_world(Vector2(entry["cell"])) - centre).normalized()
+			drops.append(direction)
+			mean += direction
+	mean = mean.normalized()
+	var widest := 0.0
+	for direction in drops:
+		widest = maxf(widest, rad_to_deg(absf(mean.angle_to(direction))))
+	_check(widest <= 70.0, "the main push stays on one stretch of the map (widest %.0f degrees from the average)" % widest)
 	_check(commander.log_lines.size() > 2, "the commander explains its decisions")
 	units_root.queue_free()
 	targets_root.queue_free()

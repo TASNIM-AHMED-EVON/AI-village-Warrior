@@ -4,6 +4,8 @@ class_name BattleBuildingTarget
 signal damaged(building_id: String, remaining_hp: int)
 signal destroyed(building_id: String)
 signal aim_changed(building_id: String, direction: Vector2)
+signal charge_changed(building_id: String, ratio: float)
+signal fired(building_id: String)
 
 const ART_DIMENSIONS := preload("res://scripts/village/village_object_layer.gd").DIMENSIONS
 ## Seconds a wall's health bar stays visible after the last hit. Other buildings keep their bar once damaged.
@@ -23,6 +25,7 @@ var aim_direction := Vector2.UP
 var visual_time_scale := 1.0
 var building_name := ""
 var _shot_time := 0.0
+var _charge := 0.0
 var _shot_target := Vector2.ZERO
 var _shot_origin := Vector2.ZERO
 var _hit_flash := 0.0
@@ -74,8 +77,28 @@ func impact_point() -> Vector2:
 	return global_position + Vector2(0, _art_center_y)
 
 
+## Where a defense's shot leaves it, relative to the building's origin.
+func shot_pivot() -> Vector2:
+	match building_type:
+		"cannon":
+			return Vector2(-2, -34)
+		"wizard_tower":
+			return Vector2(0, -226)
+		_:
+			return Vector2(0, -150)
+
+
+## 0..1: how close the defense is to its next shot. Drives the archer's draw and the wizard's crystal glow.
+func set_charge(ratio: float) -> void:
+	ratio = clampf(ratio, 0.0, 1.0)
+	if absf(ratio - _charge) < 0.03 and not (ratio == 0.0 and _charge != 0.0):
+		return
+	_charge = ratio
+	charge_changed.emit(building_id, ratio)
+
+
 func aim_at(world_position: Vector2) -> void:
-	var pivot_offset := Vector2(-2, -34) if building_type == "cannon" else Vector2(0, -150)
+	var pivot_offset := shot_pivot()
 	var direction := world_position - (global_position + pivot_offset)
 	if direction.length_squared() > 0.01:
 		aim_direction = direction.normalized()
@@ -86,8 +109,9 @@ func aim_at(world_position: Vector2) -> void:
 func fire_at(world_position: Vector2) -> void:
 	aim_at(world_position)
 	_shot_target = to_local(world_position)
-	var pivot := Vector2(-2, -34) if building_type == "cannon" else Vector2(0, -150)
+	var pivot := shot_pivot()
 	var muzzle_distance := 42.0 if building_type == "cannon" else 18.0
+	fired.emit(building_id)
 	_shot_origin = pivot + aim_direction * muzzle_distance
 	_shot_time = 0.12
 	queue_redraw()
@@ -198,13 +222,14 @@ func _draw() -> void:
 		for index in range(6):
 			var direction := Vector2.RIGHT.rotated(TAU * float(index) / 6.0)
 			draw_line(_hit_point + direction * (radius + 2.0), _hit_point + direction * (radius + 8.0), Color("fff0a2", 1.0 - progress), 2.5, true)
-	if building_type == "archer_tower":
-		# The tower sprite contains its own archer; this directional bow/arrow cue follows the live aim.
+	if building_type == "archer_tower" and _charge > 0.1:
+		# The archer draws back as the next shot charges: a nocked arrow pointing at the live aim.
 		var archer_origin := Vector2(0, -150)
-		var arrow_tip := archer_origin + aim_direction * 18.0
-		draw_line(archer_origin, arrow_tip, Color("f4df9f"), 2.0, true)
-		draw_line(arrow_tip, arrow_tip - aim_direction.rotated(0.5) * 5.0, Color("f4df9f"), 1.5, true)
-		draw_line(arrow_tip, arrow_tip - aim_direction.rotated(-0.5) * 5.0, Color("f4df9f"), 1.5, true)
+		var arrow_tip := archer_origin + aim_direction * (10.0 + 12.0 * _charge)
+		var cue := Color(0.96, 0.87, 0.62, 0.35 + 0.6 * _charge)
+		draw_line(archer_origin, arrow_tip, cue, 2.0, true)
+		draw_line(arrow_tip, arrow_tip - aim_direction.rotated(0.5) * 5.0, cue, 1.5, true)
+		draw_line(arrow_tip, arrow_tip - aim_direction.rotated(-0.5) * 5.0, cue, 1.5, true)
 	if _shot_time > 0.0:
 		# Keep the supplied cannon/tower artwork intact and render a brief shot travelling from its muzzle.
 		var progress := 1.0 - clampf(_shot_time / 0.12, 0.0, 1.0)

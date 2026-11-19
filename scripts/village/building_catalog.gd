@@ -6,8 +6,8 @@ const DEFINITIONS := {
 	"town_hall": {
 		"name": "Town Hall", "footprint": Vector2i(3, 3), "hp": 1200,
 		"cost": 0,
-		"color": Color("d99c50"), "accent": Color("f3d27c"), "category": "Core",
-		"description": "The heart of the village.",
+		"color": Color("8a4fd0"), "accent": Color("ffd24a"), "category": "Core",
+		"description": "The royal heart of the village.",
 	},
 	"cannon": {
 		"name": "Cannon", "footprint": Vector2i(2, 2), "hp": 420,
@@ -20,6 +20,12 @@ const DEFINITIONS := {
 		"cost": 600,
 		"color": Color("8b6547"), "accent": Color("9ce3a5"), "category": "Defense",
 		"description": "A watchful tower for village guards.",
+	},
+	"wizard_tower": {
+		"name": "Wizard Tower", "footprint": Vector2i(2, 2), "hp": 480,
+		"cost": 650,
+		"color": Color("7a5cc8"), "accent": Color("bfe6ff"), "category": "Defense",
+		"description": "Hurls arcane bolts that splash several attackers at once. Hits ground and air.",
 	},
 	"gold_mine": {
 		"name": "Gold Mine", "footprint": Vector2i(2, 2), "hp": 300,

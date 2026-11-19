@@ -37,7 +37,13 @@ const BREACH_GAP_WEIGHT := 1.5
 const HOME_ARRIVAL_DISTANCE := 6.0
 const DEFENDER_HIT_PROBABILITY := 0.85
 ## Projectile speeds (world px per battle second) and the shortest / longest time a shot is allowed to fly.
-const PROJECTILE_SPEEDS := {"arrow": 820.0, "magic": 560.0, "fire": 900.0}
+const PROJECTILE_SPEEDS := {"arrow": 820.0, "magic": 560.0, "fire": 900.0, "arcane": 520.0}
+## What each defense does. A wizard tower's bolt also hurts every attacker near the one it hits (`splash` pixels).
+const DEFENSE_STATS := {
+	"cannon": {"reach": 330.0, "damage": 42, "interval": 1.5, "ground_only": true, "splash": 0.0},
+	"archer_tower": {"reach": 270.0, "damage": 28, "interval": 1.0, "ground_only": false, "splash": 0.0},
+	"wizard_tower": {"reach": 300.0, "damage": 34, "interval": 1.5, "ground_only": false, "splash": 60.0},
+}
 const PROJECTILE_MIN_FLIGHT := 0.14
 const PROJECTILE_MAX_FLIGHT := 0.42
 
@@ -128,6 +134,10 @@ func begin_battle(enemy_village: VillageModel, actor_root: Node2D, target_root: 
 		target.configure(structure, village.grid)
 		if units_root.has_method("set_building_aim"):
 			target.aim_changed.connect(Callable(units_root, "set_building_aim"))
+		if units_root.has_method("set_building_charge"):
+			target.charge_changed.connect(Callable(units_root, "set_building_charge"))
+		if units_root.has_method("play_defense_fire"):
+			target.fired.connect(Callable(units_root, "play_defense_fire"))
 		target.damaged.connect(_on_building_damaged)
 		target.destroyed.connect(_on_building_destroyed)
 		targets_root.add_child(target)
@@ -310,7 +320,7 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 			continue
 		candidates.append(candidate)
 		candidate_paths[candidate.building_id] = path
-		path_costs[candidate.building_id] = maxi(0, path.size() - 1)
+		path_costs[candidate.building_id] = GridPathfinder.path_length(path)
 		stand_positions[candidate.building_id] = village.grid.cell_to_world(Vector2(path[path.size() - 1]))
 	# Defending troops released from a Clan Castle are targets too.
 	var troop_candidates: Array[TroopActor] = []
@@ -326,7 +336,7 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 		troop_candidates.append(defender)
 		troop_lookup[troop_key] = defender
 		candidate_paths[troop_key] = troop_path
-		path_costs[troop_key] = maxi(0, troop_path.size() - 1)
+		path_costs[troop_key] = GridPathfinder.path_length(troop_path)
 		stand_positions[troop_key] = actor.global_position if troop_path.is_empty() else village.grid.cell_to_world(Vector2(troop_path[troop_path.size() - 1]))
 	if candidates.is_empty() and troop_candidates.is_empty():
 		var breach_target := _find_breaching_wall(actor)
@@ -335,7 +345,7 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 			if not breach_path.is_empty():
 				candidates.append(breach_target)
 				candidate_paths[breach_target.building_id] = breach_path
-				path_costs[breach_target.building_id] = maxi(0, breach_path.size() - 1)
+				path_costs[breach_target.building_id] = GridPathfinder.path_length(breach_path)
 				stand_positions[breach_target.building_id] = village.grid.cell_to_world(Vector2(breach_path[breach_path.size() - 1]))
 	if candidates.is_empty() and troop_candidates.is_empty():
 		actor.clear_target()
@@ -360,7 +370,7 @@ func _assign_minimax_attack_plan(actor: TroopActor) -> void:
 	if best_target is BattleBuildingTarget:
 		_claim_slot(actor, chosen_path)
 	actor.repath_cooldown = REPATH_INTERVAL
-	last_ai_decision["path_cost"] = maxi(0, chosen_path.size() - 1)
+	last_ai_decision["path_cost"] = GridPathfinder.path_length(chosen_path)
 	last_ai_decision["target_name"] = _describe_target(best_target)
 	if visualization_enabled and best_target is BattleBuildingTarget:
 		var trace := {"record": true}
@@ -377,17 +387,20 @@ func _build_defense_inputs(actor: TroopActor) -> Array[Dictionary]:
 	var defenses: Array[Dictionary] = []
 	for structure in village.structures:
 		var type := str(structure.get("type", ""))
-		if type != "cannon" and type != "archer_tower":
+		if not DEFENSE_STATS.has(type):
 			continue
+		var stats: Dictionary = DEFENSE_STATS[type]
+		if bool(stats["ground_only"]) and actor.is_flying:
+			continue  # Cannons cannot hit a flyer, so they are no threat to it.
 		var defense_target: BattleBuildingTarget = building_targets.get(str(structure.get("id", "")))
 		if not is_instance_valid(defense_target):
 			continue
-		var is_cannon := type == "cannon"
-		var interval := 1.5 if is_cannon else 1.0
+		var interval := float(stats["interval"])
+		var splash_bonus := 1.25 if float(stats["splash"]) > 0.0 else 1.0
 		defenses.append({
 			"id": defense_target.building_id,
-			"damage": 42 if is_cannon else 28,
-			"range": 330.0 if is_cannon else 270.0,
+			"damage": float(stats["damage"]) * splash_bonus,
+			"range": float(stats["reach"]),
 			"hit_probability": DEFENDER_HIT_PROBABILITY,
 			"position": defense_target.global_position,
 			"rate": clampf(actor.attack_interval / interval, 0.25, 3.0),
@@ -684,7 +697,7 @@ func _find_breaching_wall(actor: TroopActor) -> BattleBuildingTarget:
 		var path := GridPathfinder.find_path_to_any(village.grid, start, access, path_algorithm)
 		if path.is_empty():
 			continue
-		var score := float(path.size()) + BREACH_GAP_WEIGHT * float(entry["gap"])
+		var score := GridPathfinder.path_length(path) + BREACH_GAP_WEIGHT * float(entry["gap"])
 		if score < best_score:
 			best_score = score
 			best_target = building_targets.get(str(structure.get("id", "")))
@@ -875,28 +888,48 @@ func _on_defender_died(defender: TroopActor) -> void:
 func _update_defenses(delta: float) -> void:
 	for structure in village.structures:
 		var type: String = structure["type"]
-		if type != "cannon" and type != "archer_tower":
+		if not DEFENSE_STATS.has(type):
 			continue
+		var stats: Dictionary = DEFENSE_STATS[type]
 		var building_id: String = structure["id"]
 		var cooldown := maxf(0.0, float(tower_cooldowns.get(building_id, 0.0)) - delta)
 		var target: TroopActor = tower_targets.get(building_id)
-		var reach := 330.0 if type == "cannon" else 270.0
+		var reach := float(stats["reach"])
 		var defense_target: Variant = building_targets.get(building_id)
 		if not is_instance_valid(defense_target):
 			continue
-		var ground_only := type == "cannon"
+		var ground_only := bool(stats["ground_only"])
 		if not is_instance_valid(target) or target.state == TroopActor.State.DEAD or target.global_position.distance_to(defense_target.global_position) > reach or (ground_only and target.is_flying):
 			target = _select_defender_response(defense_target.global_position, reach, ground_only)
 			tower_targets[building_id] = target
 		if is_instance_valid(target):
 			defense_target.aim_at(target.global_position)
+			defense_target.set_charge(1.0 - cooldown / float(stats["interval"]))
 			if cooldown <= 0.0:
 				defense_target.fire_at(target.global_position)
-				var attack_damage := 42 if type == "cannon" else 28
+				var attack_damage := int(stats["damage"])
 				target.apply_damage(attack_damage, defense_target.global_position)
-				damage_event.emit(target.global_position, attack_damage, type == "cannon")
-				cooldown = 1.5 if type == "cannon" else 1.0
+				damage_event.emit(target.global_position, attack_damage, type != "archer_tower")
+				if float(stats["splash"]) > 0.0:
+					_arcane_splash(defense_target, target, attack_damage, float(stats["splash"]))
+				cooldown = float(stats["interval"])
+		else:
+			defense_target.set_charge(0.0)
 		tower_cooldowns[building_id] = cooldown
+
+
+## The Wizard Tower's bolt: it flies from the glowing crystal and also damages every attacker around the one it hit.
+func _arcane_splash(tower: BattleBuildingTarget, victim: TroopActor, damage: int, radius: float) -> void:
+	var origin := tower.global_position + tower.shot_pivot()
+	var flight := _projectile_flight_time("arcane", origin.distance_to(victim.global_position))
+	projectile_event.emit("arcane", origin, victim.global_position, flight)
+	for other in attacker_units:
+		if other == victim or not is_instance_valid(other) or other.state == TroopActor.State.DEAD:
+			continue
+		if other.global_position.distance_to(victim.global_position) <= radius:
+			var splash_damage := int(round(float(damage) * 0.7))
+			other.apply_damage(splash_damage, tower.global_position)
+			damage_event.emit(other.global_position, splash_damage, false)
 
 
 func _select_defender_response(from_position: Vector2, max_range: float, ground_only: bool = false) -> TroopActor:
